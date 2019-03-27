@@ -1,0 +1,66 @@
+name:                scheduler
+version:             1.0.0
+synopsis:            Work stealing scheduler.
+description:         A work stealing scheduler that is primarly developed for [massiv](https://github.com/lehins/massiv) array librarry, but it is general enough to be useful for any computation that fits the model of few workers many jobs.
+homepage:            https://github.com/lehins/haskell-scheduler
+license:             BSD3
+license-file:        LICENSE
+author:              Alexey Kuleshevich
+maintainer:          alexey@kuleshevi.ch
+copyright:           2018-2019 Alexey Kuleshevich
+category:            Parallelism, Concurrency
+build-type:          Custom
+extra-source-files:  README.md
+cabal-version:       >=1.10
+
+custom-setup
+  setup-depends:
+      base
+    , Cabal
+    , cabal-doctest  >=1.0.6
+
+library
+  hs-source-dirs:      src
+  exposed-modules:     Control.Scheduler
+
+  other-modules:       Control.Scheduler.Computation
+                     , Control.Scheduler.Queue
+  build-depends:       base            >= 4.9 && < 5
+                     , atomic-primops
+                     , deepseq
+                     , exceptions
+                     , unliftio-core
+
+  default-language:    Haskell2010
+  ghc-options:         -Wall
+
+
+test-suite tests
+  type:               exitcode-stdio-1.0
+  hs-source-dirs:     tests
+  main-is:            Main.hs
+  other-modules:      Spec
+                    , Control.SchedulerSpec
+  build-depends:      base
+                    , deepseq
+                    , scheduler
+                    , hspec
+                    , QuickCheck
+                    , unliftio
+
+  default-language:   Haskell2010
+  ghc-options:        -Wall -fno-warn-orphans -threaded -with-rtsopts=-N
+
+test-suite doctests
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   tests
+  main-is:          doctests.hs
+  build-depends: base
+               , doctest           >=0.15
+               , scheduler
+               , template-haskell
+  default-language:    Haskell2010
+
+source-repository head
+  type:     git
+  location: https://github.com/lehins/massiv
