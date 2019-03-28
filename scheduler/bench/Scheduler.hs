@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 module Main where
 
-import Control.Monad (void)
+import Control.Monad (void, replicateM_)
 import Control.Concurrent.Async (mapConcurrently, mapConcurrently_)
 import Control.Monad.Par (parMapM, runParIO)
 import Control.Parallel (par)
@@ -34,12 +34,12 @@ mkSumBench n elts =
         ("Discard Sums: " <> show n)
         [ bgroup "unliftio" [bench "pooledMapConcurrently_" $ nfIO (pooledMapConcurrently_ f xs)]
         , bgroup "scheduler" [bench "traverseConcurrently_" $ nfIO (traverseConcurrently_ Par f xs)]
-        , bgroup "async" [bench "mapConcurrently" $ nfIO (mapConcurrently_ f xs)]
+        , bgroup "async" [bench "mapConcurrently_" $ nfIO (mapConcurrently_ f xs)]
         ]
   , bgroup
       "NoList"
       [ bench "scheduler" $
-        nfIO $ withScheduler_ Par $ \s -> loopM_ n $ scheduleWork s $ void $ f [0 .. elts]
+        nfIO $ withScheduler_ Par $ \s -> replicateM_ n $ scheduleWork s $ void $ f [0 .. elts]
       , bench "streamly" $
         nfIO $ S.runStream $ asyncly $ S.replicateM n (fstreamly $ S.enumerateFromTo 0 elts)
       ]
@@ -53,11 +53,3 @@ mkSumBench n elts =
       let ys = F.foldl' (+) 0 xs
        in ys `par` pure ys
     fstreamly = S.foldl' (+) 0
-
-
-loopM_ :: Monad m => Int -> m a -> m ()
-loopM_ n f = go 0
-  where
-    go !i
-      | i < n = f >> go (i + 1)
-      | otherwise = pure ()
