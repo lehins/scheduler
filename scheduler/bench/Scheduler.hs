@@ -33,7 +33,7 @@ mkSumBench n elts =
   -- , 
     env (pure elts) $ \x ->
       bgroup
-        ("Replicate Sums: " <> show x)
+        ("Replicate Sums: " <> show n)
         [ bench "scheduler/replicateConcurrently" $
           nfIO $ withScheduler Par $ \s -> replicateM_ n $ scheduleWork s (f [0 .. x])
         , bench "async/replicateConcurrently" $ nfIO $ A.replicateConcurrently n $ f [0 .. x]
