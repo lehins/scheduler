@@ -82,7 +82,8 @@ transList xs' = snd . mapAccumL withR xs'
 --
 -- @since 1.0.0
 traverseConcurrently_ :: (MonadUnliftIO m, Foldable t) => Comp -> (a -> m b) -> t a -> m ()
-traverseConcurrently_ comp f xs = withScheduler_ comp $ \s -> traverse_ (scheduleWork s . f) xs
+traverseConcurrently_ comp f xs =
+  withScheduler_ comp $ \s -> scheduleWork s $ traverse_ (scheduleWork s . void . f) xs
 
 scheduleJobs :: MonadIO m => Jobs m a -> m a -> m ()
 scheduleJobs = scheduleJobsWith mkJob

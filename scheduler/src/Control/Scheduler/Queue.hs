@@ -8,13 +8,8 @@
 -- Portability : non-portable
 --
 module Control.Scheduler.Queue
-  ( -- * Queue
-    -- ** Pure queue
-    Queue
-  , pushQueue
-  , popQueue
-  -- ** Job queue
-  , Job(Retire, Job_)
+  (  -- * Job queue
+    Job(Retire, Job_)
   , mkJob
   , JQueue
   , newJQueue
@@ -38,14 +33,6 @@ data Queue m a = Queue
   , qBaton   :: !(MVar ())
   }
 
-
--- -- | Pure functional Okasaki queue
--- data Queue a = Queue { qQueue :: ![a]
---                      , qStack :: ![a]
---                      }
-
-pushQueue :: Queue m a -> Job m a -> Queue m a
-pushQueue queue@Queue {qStack} x = queue {qStack = x : qStack}
 
 popQueue :: Queue m a -> Maybe (Job m a, Queue m a)
 popQueue queue@Queue {qQueue, qStack} =
