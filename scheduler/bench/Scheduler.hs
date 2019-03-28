@@ -1,7 +1,6 @@
-{-# LANGUAGE BangPatterns #-}
 module Main where
 
-import Control.Monad (void, replicateM_)
+import Control.Monad (replicateM_)
 import Control.Concurrent.Async (mapConcurrently, mapConcurrently_)
 import Control.Monad.Par (parMapM, runParIO)
 import Control.Parallel (par)
@@ -39,7 +38,7 @@ mkSumBench n elts =
   , bgroup
       "NoList"
       [ bench "scheduler" $
-        nfIO $ withScheduler_ Par $ \s -> replicateM_ n $ scheduleWork s $ void $ f [0 .. elts]
+        nfIO $ withScheduler Par $ \s -> replicateM_ n $ scheduleWork s $ f [0 .. elts]
       , bench "streamly" $
         nfIO $ S.runStream $ asyncly $ S.replicateM n (fstreamly $ S.enumerateFromTo 0 elts)
       ]
