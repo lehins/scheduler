@@ -20,6 +20,8 @@ module Control.Scheduler
   , withScheduler
   , withScheduler_
   -- * Useful functions
+  , replicateConcurrently
+  , replicateConcurrently_
   , traverseConcurrently
   , traverseConcurrently_
   , traverse_
@@ -84,6 +86,22 @@ transList xs' = snd . mapAccumL withR xs'
 traverseConcurrently_ :: (MonadUnliftIO m, Foldable t) => Comp -> (a -> m b) -> t a -> m ()
 traverseConcurrently_ comp f xs =
   withScheduler_ comp $ \s -> scheduleWork s $ traverse_ (scheduleWork s . void . f) xs
+
+-- | Replicate an action @n@ times and schedule them acccording to the supplied computation
+-- strategy.
+--
+-- @since 1.1.0
+replicateConcurrently :: MonadUnliftIO m => Comp -> Int -> m a -> m [a]
+replicateConcurrently comp n f =
+  withScheduler comp $ \s -> replicateM_ n $ scheduleWork s f
+
+-- | Just like `replicateConcurrently`, but discards the results of computation.
+--
+-- @since 1.1.0
+replicateConcurrently_ :: MonadUnliftIO m => Comp -> Int -> m a -> m ()
+replicateConcurrently_ comp n f =
+  withScheduler_ comp $ \s -> scheduleWork s $ replicateM_ n (scheduleWork s $ void f)
+
 
 scheduleJobs :: MonadIO m => Jobs m a -> m a -> m ()
 scheduleJobs = scheduleJobsWith mkJob
