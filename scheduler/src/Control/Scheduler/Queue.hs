@@ -11,7 +11,6 @@ module Control.Scheduler.Queue
   ( -- * Queue
     -- ** Pure queue
     Queue
-  , emptyQueue
   , pushQueue
   , popQueue
   -- ** Job queue
@@ -32,25 +31,30 @@ import Data.Atomics (atomicModifyIORefCAS)
 import Data.IORef
 
 
--- | Pure functional Okasaki queue
-data Queue a = Queue { qQueue :: ![a]
-                     , qStack :: ![a]
-                     }
+data Queue m a = Queue
+  { qQueue   :: ![Job m a]
+  , qStack   :: ![Job m a]
+  , qResults :: ![IORef a]
+  , qBaton   :: !(MVar ())
+  }
 
-emptyQueue :: Queue a
-emptyQueue = Queue [] []
 
-pushQueue :: Queue a -> a -> Queue a
+-- -- | Pure functional Okasaki queue
+-- data Queue a = Queue { qQueue :: ![a]
+--                      , qStack :: ![a]
+--                      }
+
+pushQueue :: Queue m a -> Job m a -> Queue m a
 pushQueue queue@Queue {qStack} x = queue {qStack = x : qStack}
 
-popQueue :: Queue a -> Maybe (a, Queue a)
+popQueue :: Queue m a -> Maybe (Job m a, Queue m a)
 popQueue queue@Queue {qQueue, qStack} =
   case qQueue of
     x:xs -> Just (x, queue {qQueue = xs})
     [] ->
       case reverse qStack of
         []   -> Nothing
-        y:ys -> Just (y, Queue {qQueue = ys, qStack = []})
+        y:ys -> Just (y, queue {qQueue = ys, qStack = []})
 
 data Job m a
   = Job !(IORef a) !(m a)
@@ -67,15 +71,12 @@ mkJob action = do
       liftIO $ writeIORef resRef res
       return res
 
-
-data JobRef m a = JobRef !(Queue (Job m a)) ![IORef a] !(MVar ())
-
-newtype JQueue m a = JQueue (IORef (JobRef m a))
+newtype JQueue m a = JQueue (IORef (Queue m a))
 
 newJQueue :: MonadIO m => m (JQueue m a)
 newJQueue = do
   newBaton <- liftIO newEmptyMVar
-  queueRef <- liftIO $ newIORef (JobRef emptyQueue [] newBaton)
+  queueRef <- liftIO $ newIORef (Queue [] [] [] newBaton)
   return $ JQueue queueRef
 
 
@@ -86,13 +87,14 @@ pushJQueue (JQueue jQueueRef) job = do
     liftIO $
     atomicModifyIORefCAS
       jQueueRef
-      (\(JobRef queue resRefs baton) ->
-         ( JobRef
-             (pushQueue queue job)
-             (case job of
-                Job resRef _ -> resRef : resRefs
-                _ -> resRefs)
-             newBaton
+      (\(Queue queue stack resRefs baton) ->
+         ( Queue
+           queue
+           (job:stack)
+           (case job of
+               Job resRef _ -> resRef : resRefs
+               _            -> resRefs)
+           newBaton
          , liftIO $ putMVar baton ()))
 
 
@@ -101,20 +103,22 @@ popJQueue (JQueue jQueueRef) = liftIO inner
   where
     inner =
       join $
-      atomicModifyIORefCAS jQueueRef $ \jRef@(JobRef queue resRefs baton) ->
+      atomicModifyIORefCAS jQueueRef $ \queue ->
         case popQueue queue of
-          Nothing -> (jRef, readMVar baton >> inner)
+          Nothing -> (queue, readMVar (qBaton queue) >> inner)
           Just (job, newQueue) ->
-            ( JobRef newQueue resRefs baton
+            ( newQueue
             , case job of
                 Job _ action -> return $ Just (void action)
                 Job_ action_ -> return $ Just action_
-                Retire -> return Nothing)
+                Retire       -> return Nothing)
+
+
 
 flushResults :: MonadIO m => JQueue m a -> m [a]
 flushResults (JQueue jQueueRef) =
   liftIO $ do
     resRefs <-
-      atomicModifyIORefCAS jQueueRef $ \(JobRef queue resRefs baton) ->
-        (JobRef queue [] baton, resRefs)
+      atomicModifyIORefCAS jQueueRef $ \queue ->
+        (queue { qResults = []}, qResults queue)
     mapM readIORef $ reverse resRefs
