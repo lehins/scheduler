@@ -26,7 +26,7 @@ library
   other-modules:       Control.Scheduler.Computation
                      , Control.Scheduler.Queue
   build-depends:       base            >= 4.9 && < 5
-                     --, atomic-primops
+                     , atomic-primops
                      , deepseq
                      , exceptions
                      , unliftio-core

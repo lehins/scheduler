@@ -33,7 +33,7 @@ import Control.Scheduler.Computation
 import Control.Scheduler.Queue
 import Control.Monad
 import Control.Monad.IO.Unlift
---import Data.Atomics (atomicModifyIORefCAS, atomicModifyIORefCAS_)
+import Data.Atomics (atomicModifyIORefCAS, atomicModifyIORefCAS_)
 import Data.Foldable as F (foldl')
 import Data.IORef
 import Data.Traversable
@@ -95,14 +95,7 @@ scheduleJobs_ = scheduleJobsWith (return . Job_ . void)
 
 scheduleJobsWith :: MonadIO m => (m b -> m (Job m a)) -> Jobs m a -> m b -> m ()
 scheduleJobsWith mkJob' Jobs {jobsQueue, jobsCountRef, jobsNumWorkers} action = do
-  liftIO $
-    void $
-    atomicModifyIORef'
-      jobsCountRef
-      (\ !i' ->
-         let !i = i' + 1
-          in (i, i))
-  -- liftIO $ atomicModifyIORefCAS_ jobsCountRef (+ 1)
+  liftIO $ atomicModifyIORefCAS_ jobsCountRef (+ 1)
   job <-
     mkJob' $ do
       res <- action
@@ -119,7 +112,7 @@ dropCounterOnZero :: MonadIO m => IORef Int -> m () -> m ()
 dropCounterOnZero counterRef onZero = do
   jc <-
     liftIO $
-    atomicModifyIORef'
+    atomicModifyIORefCAS
       counterRef
       (\ !i' ->
          let !i = i' - 1

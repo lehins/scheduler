@@ -28,11 +28,11 @@ module Control.Scheduler.Queue
 import Control.Concurrent.MVar
 import Control.Monad (join, void)
 import Control.Monad.IO.Unlift
---import Data.Atomics (atomicModifyIORefCAS)
+import Data.Atomics (atomicModifyIORefCAS)
 import Data.IORef
 
 
--- | Pure functional Okasaki queue with total length
+-- | Pure functional Okasaki queue
 data Queue a = Queue { qQueue :: ![a]
                      , qStack :: ![a]
                      }
@@ -84,7 +84,7 @@ pushJQueue (JQueue jQueueRef) job = do
   newBaton <- liftIO newEmptyMVar
   join $
     liftIO $
-    atomicModifyIORef'
+    atomicModifyIORefCAS
       jQueueRef
       (\(JobRef queue resRefs baton) ->
          ( JobRef
@@ -101,7 +101,7 @@ popJQueue (JQueue jQueueRef) = liftIO inner
   where
     inner =
       join $
-      atomicModifyIORef' jQueueRef $ \jRef@(JobRef queue resRefs baton) ->
+      atomicModifyIORefCAS jQueueRef $ \jRef@(JobRef queue resRefs baton) ->
         case popQueue queue of
           Nothing -> (jRef, readMVar baton >> inner)
           Just (job, newQueue) ->
@@ -115,6 +115,6 @@ flushResults :: MonadIO m => JQueue m a -> m [a]
 flushResults (JQueue jQueueRef) =
   liftIO $ do
     resRefs <-
-      atomicModifyIORef' jQueueRef $ \(JobRef queue resRefs baton) ->
+      atomicModifyIORefCAS jQueueRef $ \(JobRef queue resRefs baton) ->
         (JobRef queue [] baton, resRefs)
     mapM readIORef $ reverse resRefs

@@ -187,6 +187,64 @@ aaaaaaaaaabbbbbbbbbbccccccccccddddddddddffffffffffeeeeeeeeee
 Done
 ```
 
+## Benchmarks
+
+It is always good to see some benchmarks. Below is a very simple comparison of:
+
+* [`pooledMapConcurrently`](https://hackage.haskell.org/package/unliftio-0.2.10/docs/UnliftIO-Async.html#v:pooledMapConcurrently) from `unliftio`
+* [`parMapM`](http://hackage.haskell.org/package/monad-par-extras-0.3.3/docs/Control-Monad-Par-Combinator.html) from `monad-par`
+* [`traverseConcurrently`](https://hackage.haskell.org/package/scheduler-1.0.0/docs/Control-Scheduler.html#v:traverseConcurrently) from `scheduler`
+* [`mapConcurrently`](http://hackage.haskell.org/package/async-2.2.1/docs/Control-Concurrent-Async.html#v:mapConcurrently) from `async`
+* `traverse` from `base` with
+  [`par`](http://hackage.haskell.org/package/parallel-3.2.2.0/docs/Control-Parallel.html#v:par) from
+  `parallel`
+* Regular sequential `traverse` as a basepoint
+
+Benchmarked function is very simple, we simply `map` a `sum` function over a list of lists. Although
+`scheduler` is already doing pretty good it looks like there is still some room for improvement.
+
+
+```
+benchmarking Sums: 1000/unliftio/pooledMapConcurrently
+time                 57.60 ms   (56.28 ms .. 58.42 ms)
+                     0.999 R²   (0.997 R² .. 1.000 R²)
+mean                 56.40 ms   (54.90 ms .. 57.89 ms)
+std dev              2.696 ms   (1.725 ms .. 4.221 ms)
+variance introduced by outliers: 15% (moderately inflated)
+
+benchmarking Sums: 1000/monad-par/parMapM
+time                 58.27 ms   (57.22 ms .. 59.13 ms)
+                     0.999 R²   (0.998 R² .. 1.000 R²)
+mean                 59.68 ms   (59.05 ms .. 60.94 ms)
+std dev              1.814 ms   (837.5 μs .. 2.646 ms)
+
+benchmarking Sums: 1000/scheduler/traverseConcurrently
+time                 60.76 ms   (59.81 ms .. 61.37 ms)
+                     1.000 R²   (0.999 R² .. 1.000 R²)
+mean                 60.69 ms   (60.16 ms .. 61.91 ms)
+std dev              1.255 ms   (421.4 μs .. 2.129 ms)
+
+benchmarking Sums: 1000/async/mapConcurrently
+time                 96.35 ms   (94.71 ms .. 97.40 ms)
+                     1.000 R²   (0.999 R² .. 1.000 R²)
+mean                 96.59 ms   (95.40 ms .. 97.72 ms)
+std dev              1.923 ms   (1.215 ms .. 2.844 ms)
+
+benchmarking Sums: 1000/base/traverse . par
+time                 86.63 ms   (77.73 ms .. 96.38 ms)
+                     0.981 R²   (0.967 R² .. 0.999 R²)
+mean                 78.41 ms   (75.96 ms .. 82.60 ms)
+std dev              5.374 ms   (2.328 ms .. 8.587 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Sums: 1000/base/traverse . seq
+time                 387.5 ms   (325.4 ms .. 451.6 ms)
+                     0.996 R²   (0.987 R² .. 1.000 R²)
+mean                 445.7 ms   (416.9 ms .. 473.8 ms)
+std dev              32.93 ms   (27.12 ms .. 37.56 ms)
+variance introduced by outliers: 21% (moderately inflated)
+```
+
 ## Beware of Demons
 
 Any sort of concurrency primitives such as mutual exclusion, semaphores, etc. can easily lead to
