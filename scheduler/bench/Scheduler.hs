@@ -7,6 +7,8 @@ import Control.Scheduler (Comp(Par), traverseConcurrently, traverseConcurrently_
 import Criterion.Main
 import Data.Foldable as F
 import UnliftIO.Async (pooledMapConcurrently, pooledMapConcurrently_)
+import Streamly (asyncly)
+import qualified Streamly.Prelude as S
 
 
 main :: IO ()
@@ -24,6 +26,9 @@ mkSumBench n =
         , bgroup "base" [bench "traverse . par" $ nfIO (traverse fpar xs)]
         , bgroup "base" [bench "traverse . seq" $ nfIO (traverse f xs)]
         ]
+  , bench "streamly" $ nfIO $
+        S.runStream $ asyncly $
+            S.replicateM n (fstreamly $ S.enumerateFromTo 0 (100000 :: Int))
   ]
   where
     ls = replicate n [0 .. 100000] :: [[Int]]
@@ -33,3 +38,4 @@ mkSumBench n =
     fpar xs =
       let ys = F.foldl' (+) 0 xs
        in ys `par` pure ys
+    fstreamly xs = S.foldl' (+) 0 xs
