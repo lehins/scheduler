@@ -53,6 +53,8 @@ test_script:
       --no-terminal
       --haddock
       --no-haddock-deps
+      --bench
+      --no-run-benchmarks
 
 
 notifications:

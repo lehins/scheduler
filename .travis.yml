@@ -201,7 +201,7 @@ script:
   set -ex
   case "$BUILD" in
     stack)
-      stack $ARGS test scheduler:tests scheduler:doctests --haddock --no-haddock-deps
+      stack $ARGS test scheduler:tests scheduler:doctests --haddock --no-haddock-deps --bench --no-run-benchmarks
       ;;
     cabal)
 

@@ -187,7 +187,7 @@ aaaaaaaaaabbbbbbbbbbccccccccccddddddddddffffffffffeeeeeeeeee
 Done
 ```
 
-## Avoiding deadlocks
+## Beware of Demons
 
 Any sort of concurrency primitives such as mutual exclusion, semaphores, etc. can easily lead to
 deadlocks, starvation and other common problems. Try to avoid them and be careful if you do end up

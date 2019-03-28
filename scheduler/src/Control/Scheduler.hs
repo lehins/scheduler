@@ -33,7 +33,7 @@ import Control.Scheduler.Computation
 import Control.Scheduler.Queue
 import Control.Monad
 import Control.Monad.IO.Unlift
-import Data.Atomics (atomicModifyIORefCAS, atomicModifyIORefCAS_)
+--import Data.Atomics (atomicModifyIORefCAS, atomicModifyIORefCAS_)
 import Data.Foldable as F (foldl')
 import Data.IORef
 import Data.Traversable
@@ -95,7 +95,14 @@ scheduleJobs_ = scheduleJobsWith (return . Job_ . void)
 
 scheduleJobsWith :: MonadIO m => (m b -> m (Job m a)) -> Jobs m a -> m b -> m ()
 scheduleJobsWith mkJob' Jobs {jobsQueue, jobsCountRef, jobsNumWorkers} action = do
-  liftIO $ atomicModifyIORefCAS_ jobsCountRef (+ 1)
+  liftIO $
+    void $
+    atomicModifyIORef'
+      jobsCountRef
+      (\ !i' ->
+         let !i = i' + 1
+          in (i, i))
+  -- liftIO $ atomicModifyIORefCAS_ jobsCountRef (+ 1)
   job <-
     mkJob' $ do
       res <- action
@@ -111,7 +118,8 @@ retireWorkersN jobsQueue n = traverse_ (pushJQueue jobsQueue) $ replicate n Reti
 dropCounterOnZero :: MonadIO m => IORef Int -> m () -> m ()
 dropCounterOnZero counterRef onZero = do
   jc <-
-    liftIO $ atomicModifyIORefCAS
+    liftIO $
+    atomicModifyIORef'
       counterRef
       (\ !i' ->
          let !i = i' - 1
@@ -205,8 +213,8 @@ withSchedulerInternal comp submitWork collect onScheduler = do
   let jobs = Jobs {..}
       scheduler = Scheduler {numWorkers = jobsNumWorkers, scheduleWork = submitWork jobs}
       onRetire = dropCounterOnZero sWorkersCounterRef $ liftIO (putMVar workDoneMVar Nothing)
-  -- / Wait for the initial jobs to get scheduled before spawining off the workers, otherwise it would
-  -- be trickier to identify the beginning and the end of a job pool.
+  -- / Wait for the initial jobs to get scheduled before spawining off the workers, otherwise it
+  -- would be trickier to identify the beginning and the end of a job pool.
   _ <- onScheduler scheduler
   -- / Ensure at least something gets scheduled, so retirement can be triggered
   jc <- liftIO $ readIORef jobsCountRef
@@ -218,7 +226,7 @@ withSchedulerInternal comp submitWork collect onScheduler = do
               catch
                 (unmask $ run $ runWorker jobsQueue onRetire)
                 (run . handleWorkerException jobsQueue workDoneMVar jobsNumWorkers)
-      {-# INLINE spawnWorkersWith #-}
+      --{-# INLINE spawnWorkersWith #-}
       spawnWorkers =
         case comp of
           Seq -> return []
@@ -226,7 +234,7 @@ withSchedulerInternal comp submitWork collect onScheduler = do
           Par -> spawnWorkersWith forkOnWithUnmask [1 .. jobsNumWorkers]
           ParOn ws -> spawnWorkersWith forkOnWithUnmask ws
           ParN _ -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 .. jobsNumWorkers]
-      {-# INLINE spawnWorkers #-}
+      --{-# INLINE spawnWorkers #-}
       doWork = do
         when (comp == Seq) $ runWorker jobsQueue onRetire
         mExc <- liftIO $ readMVar workDoneMVar
@@ -239,7 +247,7 @@ withSchedulerInternal comp submitWork collect onScheduler = do
           Just (WorkerException exc) -> liftIO $ throwIO exc
           -- \ Here we need to unwrap the legit worker exception and rethrow it, so the main thread
           -- will think like it's his own
-      {-# INLINE doWork #-}
+      --{-# INLINE doWork #-}
   safeBracketOnError
     spawnWorkers
     (liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException))

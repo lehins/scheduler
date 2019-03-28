@@ -28,7 +28,7 @@ module Control.Scheduler.Queue
 import Control.Concurrent.MVar
 import Control.Monad (join, void)
 import Control.Monad.IO.Unlift
-import Data.Atomics (atomicModifyIORefCAS)
+--import Data.Atomics (atomicModifyIORefCAS)
 import Data.IORef
 
 
@@ -68,14 +68,14 @@ mkJob action = do
       return res
 
 
-newtype JQueue m a =
-  JQueue (IORef (Queue (Job m a), [IORef a], MVar ()))
+data JobRef m a = JobRef !(Queue (Job m a)) ![IORef a] !(MVar ())
 
+newtype JQueue m a = JQueue (IORef (JobRef m a))
 
 newJQueue :: MonadIO m => m (JQueue m a)
 newJQueue = do
   newBaton <- liftIO newEmptyMVar
-  queueRef <- liftIO $ newIORef (emptyQueue, [], newBaton)
+  queueRef <- liftIO $ newIORef (JobRef emptyQueue [] newBaton)
   return $ JQueue queueRef
 
 
@@ -83,14 +83,16 @@ pushJQueue :: MonadIO m => JQueue m a -> Job m a -> m ()
 pushJQueue (JQueue jQueueRef) job = do
   newBaton <- liftIO newEmptyMVar
   join $
-    liftIO $ atomicModifyIORefCAS
+    liftIO $
+    atomicModifyIORef'
       jQueueRef
-      (\(queue, resRefs, baton) ->
-         ( ( pushQueue queue job
-           , case job of
-               Job resRef _ -> resRef : resRefs
-               _            -> resRefs
-           , newBaton)
+      (\(JobRef queue resRefs baton) ->
+         ( JobRef
+             (pushQueue queue job)
+             (case job of
+                Job resRef _ -> resRef : resRefs
+                _ -> resRefs)
+             newBaton
          , liftIO $ putMVar baton ()))
 
 
@@ -99,19 +101,20 @@ popJQueue (JQueue jQueueRef) = liftIO inner
   where
     inner =
       join $
-      atomicModifyIORefCAS jQueueRef $ \jQueue@(queue, resRefs, baton) ->
+      atomicModifyIORef' jQueueRef $ \jRef@(JobRef queue resRefs baton) ->
         case popQueue queue of
-          Nothing -> (jQueue, readMVar baton >> inner)
+          Nothing -> (jRef, readMVar baton >> inner)
           Just (job, newQueue) ->
-            ( (newQueue, resRefs, baton)
+            ( JobRef newQueue resRefs baton
             , case job of
                 Job _ action -> return $ Just (void action)
                 Job_ action_ -> return $ Just action_
-                Retire       -> return Nothing)
+                Retire -> return Nothing)
 
 flushResults :: MonadIO m => JQueue m a -> m [a]
 flushResults (JQueue jQueueRef) =
   liftIO $ do
     resRefs <-
-      atomicModifyIORefCAS jQueueRef $ \(queue, resRefs, baton) -> ((queue, [], baton), resRefs)
+      atomicModifyIORef' jQueueRef $ \(JobRef queue resRefs baton) ->
+        (JobRef queue [] baton, resRefs)
     mapM readIORef $ reverse resRefs
