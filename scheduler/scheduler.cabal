@@ -71,6 +71,7 @@ benchmark scheduler
                      , async
                      , criterion
                      , deepseq
+                     , fib
                      , monad-par
                      , scheduler
                      , parallel

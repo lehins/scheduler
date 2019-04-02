@@ -1,6 +1,9 @@
-resolver: lts-12.26
+resolver: lts-13.15
 packages:
 - 'scheduler/'
 extra-deps:
 - unliftio-0.2.10@sha256:ed8bc7f9c38361aebd5481efbbbe6e3ee9468d07fffd1a7f0670f0fbbe28bb4f
 - streamly-0.6.1
+- fib-0.1@sha256:908695e8f5089f0b9ad05ba663a407c269c0553e9cd913a64f1b2543238427de
+# - base-noprelude-4.12.0.0@sha256:dcd5ece10257f79fa16e207d558b31ab3467b205adae5d1976abdee28b1c8b4a
+- semirings-0.3.1.1@sha256:0e07826f31ae276821bb1e3397ca11ffb4cfb0cc0a9903e2dc029385fe54dd6d
