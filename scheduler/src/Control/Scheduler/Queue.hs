@@ -15,7 +15,7 @@ module Control.Scheduler.Queue
   , newJQueue
   , pushJQueue
   , popJQueue
-  , flushResults
+  , readResults
   -- * Tools
   ) where
 
@@ -25,38 +25,37 @@ import Control.Monad.IO.Unlift
 import Data.Atomics (atomicModifyIORefCAS)
 import Data.IORef
 
-
 data Queue m a = Queue
   { qQueue   :: ![Job m a]
   , qStack   :: ![Job m a]
-  , qResults :: ![IORef a]
+  , qResults :: ![IORef (Maybe a)]
   , qBaton   :: !(MVar ())
   }
 
 
 popQueue :: Queue m a -> Maybe (Job m a, Queue m a)
-popQueue queue@Queue {qQueue, qStack} =
-  case qQueue of
+popQueue queue =
+  case qQueue queue of
     x:xs -> Just (x, queue {qQueue = xs})
     [] ->
-      case reverse qStack of
+      case reverse (qStack queue) of
         []   -> Nothing
         y:ys -> Just (y, queue {qQueue = ys, qStack = []})
 
 data Job m a
-  = Job !(IORef a) !(m a)
+  = Job !(IORef (Maybe a)) !(m a)
   | Job_ !(m ())
   | Retire
 
 
 mkJob :: MonadIO m => m a -> m (Job m a)
 mkJob action = do
-  resRef <- liftIO $ newIORef $ error "mkJob: result is uncomputed"
+  resRef <- liftIO $ newIORef Nothing
   return $!
     Job resRef $ do
       res <- action
-      liftIO $ writeIORef resRef res
-      return res
+      liftIO $ writeIORef resRef $ Just res
+      return $! res
 
 newtype JQueue m a = JQueue (IORef (Queue m a))
 
@@ -75,15 +74,15 @@ pushJQueue (JQueue jQueueRef) job =
     join $
       atomicModifyIORefCAS
         jQueueRef
-        (\(Queue queue stack resRefs baton) ->
+        (\Queue {qQueue, qStack, qResults, qBaton} ->
            ( Queue
-               queue
-               (job : stack)
+               qQueue
+               (job : qStack)
                (case job of
-                  Job resRef _ -> resRef : resRefs
-                  _ -> resRefs)
+                  Job resRef _ -> resRef : qResults
+                  _            -> qResults)
                newBaton
-           , liftIO $ putMVar baton ()))
+           , liftIO $ putMVar qBaton ()))
 
 
 popJQueue :: MonadIO m => JQueue m a -> m (Maybe (m ()))
@@ -103,10 +102,8 @@ popJQueue (JQueue jQueueRef) = liftIO inner
 
 
 
-flushResults :: MonadIO m => JQueue m a -> m [a]
-flushResults (JQueue jQueueRef) =
+readResults :: MonadIO m => JQueue m a -> m [Maybe a]
+readResults (JQueue jQueueRef) =
   liftIO $ do
-    resRefs <-
-      atomicModifyIORefCAS jQueueRef $ \queue ->
-        (queue { qResults = []}, qResults queue)
-    mapM readIORef $ reverse resRefs
+    resRefs <- qResults <$> readIORef jQueueRef
+    mapM readIORef resRefs
