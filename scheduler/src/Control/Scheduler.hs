@@ -20,6 +20,8 @@ module Control.Scheduler
   , withScheduler
   , withScheduler_
   -- * Useful functions
+  , replicateConcurrently
+  , replicateConcurrently_
   , traverseConcurrently
   , traverseConcurrently_
   , traverse_
@@ -84,6 +86,22 @@ transList xs' = snd . mapAccumL withR xs'
 traverseConcurrently_ :: (MonadUnliftIO m, Foldable t) => Comp -> (a -> m b) -> t a -> m ()
 traverseConcurrently_ comp f xs =
   withScheduler_ comp $ \s -> scheduleWork s $ traverse_ (scheduleWork s . void . f) xs
+
+-- | Replicate an action @n@ times and schedule them acccording to the supplied computation
+-- strategy.
+--
+-- @since 1.1.0
+replicateConcurrently :: MonadUnliftIO m => Comp -> Int -> m a -> m [a]
+replicateConcurrently comp n f =
+  withScheduler comp $ \s -> replicateM_ n $ scheduleWork s f
+
+-- | Just like `replicateConcurrently`, but discards the results of computation.
+--
+-- @since 1.1.0
+replicateConcurrently_ :: MonadUnliftIO m => Comp -> Int -> m a -> m ()
+replicateConcurrently_ comp n f =
+  withScheduler_ comp $ \s -> scheduleWork s $ replicateM_ n (scheduleWork s $ void f)
+
 
 scheduleJobs :: MonadIO m => Jobs m a -> m a -> m ()
 scheduleJobs = scheduleJobsWith mkJob
@@ -220,7 +238,6 @@ withSchedulerInternal comp submitWork collect onScheduler = do
               catch
                 (unmask $ run $ runWorker jobsQueue onRetire)
                 (run . handleWorkerException jobsQueue workDoneMVar jobsNumWorkers)
-      --{-# INLINE spawnWorkersWith #-}
       spawnWorkers =
         case comp of
           Seq -> return []
@@ -228,7 +245,6 @@ withSchedulerInternal comp submitWork collect onScheduler = do
           Par -> spawnWorkersWith forkOnWithUnmask [1 .. jobsNumWorkers]
           ParOn ws -> spawnWorkersWith forkOnWithUnmask ws
           ParN _ -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 .. jobsNumWorkers]
-      --{-# INLINE spawnWorkers #-}
       doWork = do
         when (comp == Seq) $ runWorker jobsQueue onRetire
         mExc <- liftIO $ readMVar workDoneMVar
@@ -241,7 +257,6 @@ withSchedulerInternal comp submitWork collect onScheduler = do
           Just (WorkerException exc) -> liftIO $ throwIO exc
           -- \ Here we need to unwrap the legit worker exception and rethrow it, so the main thread
           -- will think like it's his own
-      --{-# INLINE doWork #-}
   safeBracketOnError
     spawnWorkers
     (liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException))

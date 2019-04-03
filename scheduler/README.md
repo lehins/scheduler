@@ -205,44 +205,188 @@ Benchmarked function is very simple, we simply `map` a `sum` function over a lis
 
 
 ```
-benchmarking Sums: 1000/unliftio/pooledMapConcurrently
-time                 57.60 ms   (56.28 ms .. 58.42 ms)
-                     0.999 R²   (0.997 R² .. 1.000 R²)
-mean                 56.40 ms   (54.90 ms .. 57.89 ms)
-std dev              2.696 ms   (1.725 ms .. 4.221 ms)
-variance introduced by outliers: 15% (moderately inflated)
+scheduler-1.0.1: benchmarks
+Running 1 benchmarks...
+Benchmark scheduler: RUNNING...
+benchmarking replicate/Fib(1000/10000)/scheduler/replicateConcurrently
+time                 11.25 ms   (10.01 ms .. 12.28 ms)
+                     0.945 R²   (0.908 R² .. 0.975 R²)
+mean                 10.82 ms   (10.18 ms .. 11.58 ms)
+std dev              1.861 ms   (1.291 ms .. 2.572 ms)
+variance introduced by outliers: 78% (severely inflated)
 
-benchmarking Sums: 1000/monad-par/parMapM
-time                 58.27 ms   (57.22 ms .. 59.13 ms)
-                     0.999 R²   (0.998 R² .. 1.000 R²)
-mean                 59.68 ms   (59.05 ms .. 60.94 ms)
-std dev              1.814 ms   (837.5 μs .. 2.646 ms)
+benchmarking replicate/Fib(1000/10000)/unliftio/pooledReplicateConcurrently
+time                 8.941 ms   (8.576 ms .. 9.197 ms)
+                     0.987 R²   (0.970 R² .. 0.995 R²)
+mean                 9.070 ms   (8.764 ms .. 9.561 ms)
+std dev              1.073 ms   (616.4 μs .. 1.606 ms)
+variance introduced by outliers: 64% (severely inflated)
 
-benchmarking Sums: 1000/scheduler/traverseConcurrently
-time                 60.76 ms   (59.81 ms .. 61.37 ms)
-                     1.000 R²   (0.999 R² .. 1.000 R²)
-mean                 60.69 ms   (60.16 ms .. 61.91 ms)
-std dev              1.255 ms   (421.4 μs .. 2.129 ms)
+benchmarking replicate/Fib(1000/10000)/streamly/replicateM
+time                 13.05 ms   (11.63 ms .. 14.31 ms)
+                     0.954 R²   (0.882 R² .. 0.994 R²)
+mean                 13.29 ms   (12.45 ms .. 14.80 ms)
+std dev              2.845 ms   (1.269 ms .. 4.753 ms)
+variance introduced by outliers: 84% (severely inflated)
 
-benchmarking Sums: 1000/async/mapConcurrently
-time                 96.35 ms   (94.71 ms .. 97.40 ms)
-                     1.000 R²   (0.999 R² .. 1.000 R²)
-mean                 96.59 ms   (95.40 ms .. 97.72 ms)
-std dev              1.923 ms   (1.215 ms .. 2.844 ms)
+benchmarking replicate/Fib(1000/10000)/async/replicateConcurrently
+time                 26.88 ms   (24.23 ms .. 29.38 ms)
+                     0.964 R²   (0.921 R² .. 0.988 R²)
+mean                 27.38 ms   (25.96 ms .. 29.06 ms)
+std dev              3.410 ms   (2.680 ms .. 4.651 ms)
+variance introduced by outliers: 54% (severely inflated)
 
-benchmarking Sums: 1000/base/traverse . par
-time                 86.63 ms   (77.73 ms .. 96.38 ms)
-                     0.981 R²   (0.967 R² .. 0.999 R²)
-mean                 78.41 ms   (75.96 ms .. 82.60 ms)
-std dev              5.374 ms   (2.328 ms .. 8.587 ms)
+benchmarking replicate/Fib(1000/10000)/monad-par/replicateM
+time                 32.28 ms   (30.29 ms .. 33.65 ms)
+                     0.991 R²   (0.981 R² .. 0.998 R²)
+mean                 34.14 ms   (32.75 ms .. 36.11 ms)
+std dev              3.570 ms   (2.009 ms .. 5.078 ms)
+variance introduced by outliers: 42% (moderately inflated)
+
+benchmarking replicate/Fib(1000/10000)/base/replicateM
+time                 45.04 ms   (41.14 ms .. 50.00 ms)
+                     0.976 R²   (0.960 R² .. 0.991 R²)
+mean                 37.27 ms   (34.92 ms .. 40.05 ms)
+std dev              4.984 ms   (4.274 ms .. 5.931 ms)
+variance introduced by outliers: 52% (severely inflated)
+
+benchmarking replicate/Sum(1000/1000)/scheduler/replicateConcurrently
+time                 17.34 ms   (16.68 ms .. 18.01 ms)
+                     0.995 R²   (0.991 R² .. 0.999 R²)
+mean                 19.49 ms   (18.75 ms .. 20.35 ms)
+std dev              1.913 ms   (1.319 ms .. 2.557 ms)
+variance introduced by outliers: 44% (moderately inflated)
+
+benchmarking replicate/Sum(1000/1000)/unliftio/pooledReplicateConcurrently
+time                 16.79 ms   (15.90 ms .. 17.43 ms)
+                     0.993 R²   (0.990 R² .. 0.997 R²)
+mean                 16.12 ms   (15.87 ms .. 16.64 ms)
+std dev              741.7 μs   (478.6 μs .. 1.083 ms)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking replicate/Sum(1000/1000)/streamly/replicateM
+time                 16.99 ms   (16.32 ms .. 17.60 ms)
+                     0.990 R²   (0.984 R² .. 0.995 R²)
+mean                 18.99 ms   (18.41 ms .. 19.63 ms)
+std dev              1.573 ms   (1.205 ms .. 2.370 ms)
+variance introduced by outliers: 39% (moderately inflated)
+
+benchmarking replicate/Sum(1000/1000)/async/replicateConcurrently
+time                 29.23 ms   (28.43 ms .. 30.26 ms)
+                     0.997 R²   (0.994 R² .. 0.999 R²)
+mean                 27.57 ms   (26.85 ms .. 28.19 ms)
+std dev              1.514 ms   (1.112 ms .. 1.928 ms)
+variance introduced by outliers: 21% (moderately inflated)
+
+benchmarking replicate/Sum(1000/1000)/monad-par/replicateM
+time                 58.24 ms   (56.32 ms .. 61.18 ms)
+                     0.997 R²   (0.994 R² .. 0.999 R²)
+mean                 60.01 ms   (59.18 ms .. 60.81 ms)
+std dev              1.359 ms   (961.7 μs .. 2.088 ms)
+
+benchmarking replicate/Sum(1000/1000)/base/replicateM
+time                 55.84 ms   (55.28 ms .. 56.08 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 56.50 ms   (56.20 ms .. 57.01 ms)
+std dev              675.2 μs   (420.3 μs .. 893.8 μs)
+
+benchmarking map/Fib(2000)/scheduler/traverseConcurrently
+time                 13.59 ms   (12.70 ms .. 14.58 ms)
+                     0.978 R²   (0.963 R² .. 0.989 R²)
+mean                 13.89 ms   (13.33 ms .. 14.66 ms)
+std dev              1.594 ms   (1.131 ms .. 2.212 ms)
+variance introduced by outliers: 56% (severely inflated)
+
+benchmarking map/Fib(2000)/unliftio/pooledTraverseConcurrently
+time                 7.987 ms   (7.134 ms .. 8.638 ms)
+                     0.956 R²   (0.925 R² .. 0.982 R²)
+mean                 7.888 ms   (7.508 ms .. 8.551 ms)
+std dev              1.459 ms   (1.020 ms .. 2.173 ms)
+variance introduced by outliers: 81% (severely inflated)
+
+benchmarking map/Fib(2000)/streamly/mapM
+time                 19.11 ms   (16.77 ms .. 21.11 ms)
+                     0.941 R²   (0.882 R² .. 0.979 R²)
+mean                 22.59 ms   (20.54 ms .. 26.62 ms)
+std dev              6.343 ms   (1.834 ms .. 9.521 ms)
+variance introduced by outliers: 90% (severely inflated)
+
+benchmarking map/Fib(2000)/async/mapConcurrently
+time                 34.86 ms   (30.83 ms .. 38.22 ms)
+                     0.976 R²   (0.953 R² .. 0.993 R²)
+mean                 43.67 ms   (40.22 ms .. 51.87 ms)
+std dev              10.52 ms   (6.972 ms .. 14.64 ms)
+variance introduced by outliers: 79% (severely inflated)
+
+benchmarking map/Fib(2000)/par/mapM
+time                 8.682 ms   (7.618 ms .. 9.577 ms)
+                     0.942 R²   (0.924 R² .. 0.965 R²)
+mean                 8.424 ms   (8.052 ms .. 9.014 ms)
+std dev              1.182 ms   (982.7 μs .. 1.633 ms)
+variance introduced by outliers: 71% (severely inflated)
+
+benchmarking map/Fib(2000)/monad-par/mapM
+time                 33.07 ms   (31.00 ms .. 34.73 ms)
+                     0.987 R²   (0.973 R² .. 0.996 R²)
+mean                 37.42 ms   (36.11 ms .. 38.95 ms)
+std dev              3.231 ms   (2.093 ms .. 4.098 ms)
+variance introduced by outliers: 36% (moderately inflated)
+
+benchmarking map/Fib(2000)/base/mapM
+time                 26.74 ms   (25.07 ms .. 28.32 ms)
+                     0.987 R²   (0.977 R² .. 0.996 R²)
+mean                 30.41 ms   (28.86 ms .. 32.48 ms)
+std dev              4.134 ms   (2.797 ms .. 6.007 ms)
+variance introduced by outliers: 59% (severely inflated)
+
+benchmarking map/Sum(2000)/scheduler/traverseConcurrently
+time                 41.13 ms   (38.35 ms .. 43.63 ms)
+                     0.990 R²   (0.978 R² .. 0.997 R²)
+mean                 39.37 ms   (38.21 ms .. 40.45 ms)
+std dev              2.548 ms   (2.028 ms .. 4.232 ms)
 variance introduced by outliers: 19% (moderately inflated)
 
-benchmarking Sums: 1000/base/traverse . seq
-time                 387.5 ms   (325.4 ms .. 451.6 ms)
-                     0.996 R²   (0.987 R² .. 1.000 R²)
-mean                 445.7 ms   (416.9 ms .. 473.8 ms)
-std dev              32.93 ms   (27.12 ms .. 37.56 ms)
-variance introduced by outliers: 21% (moderately inflated)
+benchmarking map/Sum(2000)/unliftio/pooledTraverseConcurrently
+time                 30.85 ms   (29.73 ms .. 31.72 ms)
+                     0.996 R²   (0.991 R² .. 0.998 R²)
+mean                 34.01 ms   (33.24 ms .. 35.21 ms)
+std dev              2.182 ms   (1.629 ms .. 2.792 ms)
+variance introduced by outliers: 24% (moderately inflated)
+
+benchmarking map/Sum(2000)/streamly/mapM
+time                 40.59 ms   (39.14 ms .. 43.14 ms)
+                     0.992 R²   (0.984 R² .. 0.997 R²)
+mean                 38.08 ms   (36.46 ms .. 39.56 ms)
+std dev              2.947 ms   (2.174 ms .. 3.671 ms)
+variance introduced by outliers: 25% (moderately inflated)
+
+benchmarking map/Sum(2000)/async/mapConcurrently
+time                 57.13 ms   (52.84 ms .. 61.29 ms)
+                     0.991 R²   (0.986 R² .. 0.998 R²)
+mean                 52.29 ms   (51.04 ms .. 54.14 ms)
+std dev              2.822 ms   (2.102 ms .. 3.802 ms)
+variance introduced by outliers: 14% (moderately inflated)
+
+benchmarking map/Sum(2000)/par/mapM
+time                 79.09 ms   (72.89 ms .. 85.64 ms)
+                     0.982 R²   (0.961 R² .. 0.997 R²)
+mean                 63.74 ms   (59.19 ms .. 68.40 ms)
+std dev              8.610 ms   (7.269 ms .. 10.25 ms)
+variance introduced by outliers: 44% (moderately inflated)
+
+benchmarking map/Sum(2000)/monad-par/mapM
+time                 222.8 ms   (211.5 ms .. 233.7 ms)
+                     0.998 R²   (0.996 R² .. 1.000 R²)
+mean                 233.6 ms   (227.5 ms .. 236.6 ms)
+std dev              5.712 ms   (2.215 ms .. 8.599 ms)
+variance introduced by outliers: 14% (moderately inflated)
+
+benchmarking map/Sum(2000)/base/mapM
+time                 112.9 ms   (104.0 ms .. 118.4 ms)
+                     0.995 R²   (0.986 R² .. 1.000 R²)
+mean                 126.4 ms   (121.1 ms .. 132.3 ms)
+std dev              7.872 ms   (6.986 ms .. 8.336 ms)
+variance introduced by outliers: 12% (moderately inflated)
 ```
 
 ## Beware of Demons
@@ -250,4 +394,3 @@ variance introduced by outliers: 21% (moderately inflated)
 Any sort of concurrency primitives such as mutual exclusion, semaphores, etc. can easily lead to
 deadlocks, starvation and other common problems. Try to avoid them and be careful if you do end up
 using them.
-

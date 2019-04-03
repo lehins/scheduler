@@ -61,28 +61,29 @@ mkJob action = do
 newtype JQueue m a = JQueue (IORef (Queue m a))
 
 newJQueue :: MonadIO m => m (JQueue m a)
-newJQueue = do
-  newBaton <- liftIO newEmptyMVar
-  queueRef <- liftIO $ newIORef (Queue [] [] [] newBaton)
-  return $ JQueue queueRef
+newJQueue =
+  liftIO $ do
+    newBaton <- newEmptyMVar
+    queueRef <- newIORef (Queue [] [] [] newBaton)
+    return $ JQueue queueRef
 
 
 pushJQueue :: MonadIO m => JQueue m a -> Job m a -> m ()
-pushJQueue (JQueue jQueueRef) job = do
-  newBaton <- liftIO newEmptyMVar
-  join $
-    liftIO $
-    atomicModifyIORefCAS
-      jQueueRef
-      (\(Queue queue stack resRefs baton) ->
-         ( Queue
-           queue
-           (job:stack)
-           (case job of
-               Job resRef _ -> resRef : resRefs
-               _            -> resRefs)
-           newBaton
-         , liftIO $ putMVar baton ()))
+pushJQueue (JQueue jQueueRef) job =
+  liftIO $ do
+    newBaton <- newEmptyMVar
+    join $
+      atomicModifyIORefCAS
+        jQueueRef
+        (\(Queue queue stack resRefs baton) ->
+           ( Queue
+               queue
+               (job : stack)
+               (case job of
+                  Job resRef _ -> resRef : resRefs
+                  _ -> resRefs)
+               newBaton
+           , liftIO $ putMVar baton ()))
 
 
 popJQueue :: MonadIO m => JQueue m a -> m (Maybe (m ()))
