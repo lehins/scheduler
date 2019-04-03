@@ -36,7 +36,7 @@ import Control.Scheduler.Queue
 import Control.Monad
 import Control.Monad.IO.Unlift
 import Data.Atomics (atomicModifyIORefCAS, atomicModifyIORefCAS_)
-import Data.Foldable as F (foldl')
+import qualified Data.Foldable as F (foldl', traverse_)
 import Data.IORef
 import Data.Traversable
 
@@ -85,7 +85,7 @@ transList xs' = snd . mapAccumL withR xs'
 -- @since 1.0.0
 traverseConcurrently_ :: (MonadUnliftIO m, Foldable t) => Comp -> (a -> m b) -> t a -> m ()
 traverseConcurrently_ comp f xs =
-  withScheduler_ comp $ \s -> scheduleWork s $ traverse_ (scheduleWork s . void . f) xs
+  withScheduler_ comp $ \s -> scheduleWork s $ F.traverse_ (scheduleWork s . void . f) xs
 
 -- | Replicate an action @n@ times and schedule them acccording to the supplied computation
 -- strategy.
