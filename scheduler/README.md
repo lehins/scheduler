@@ -208,18 +208,27 @@ ab-dec"j"
 
 It is always good to see some benchmarks. Below is a very simple comparison of:
 
-* [`pooledMapConcurrently`](https://hackage.haskell.org/package/unliftio-0.2.10/docs/UnliftIO-Async.html#v:pooledMapConcurrently) from `unliftio`
-* [`parMapM`](http://hackage.haskell.org/package/monad-par-extras-0.3.3/docs/Control-Monad-Par-Combinator.html) from `monad-par`
 * [`traverseConcurrently`](https://hackage.haskell.org/package/scheduler-1.0.0/docs/Control-Scheduler.html#v:traverseConcurrently) from `scheduler`
+* [`pooledMapConcurrently`](https://hackage.haskell.org/package/unliftio-0.2.10/docs/UnliftIO-Async.html#v:pooledMapConcurrently) from `unliftio`
+* [`mapM`](https://hackage.haskell.org/package/streamly-0.6.1/docs/Streamly-Prelude.html#v:mapM) from `streamly`
+* [`parMapM`](http://hackage.haskell.org/package/monad-par-extras-0.3.3/docs/Control-Monad-Par-Combinator.html) from `monad-par`
 * [`mapConcurrently`](http://hackage.haskell.org/package/async-2.2.1/docs/Control-Concurrent-Async.html#v:mapConcurrently) from `async`
 * `traverse` from `base` with
   [`par`](http://hackage.haskell.org/package/parallel-3.2.2.0/docs/Control-Parallel.html#v:par) from
   `parallel`
 * Regular sequential `traverse` as a basepoint
 
-Benchmarked function is very simple, we simply `map` a `sum` function over a list of lists. Although
-`scheduler` is already doing pretty good it looks like there is still some room for improvement.
+Similar functions are used for `replicateM` functionality from the corresponding libraries.
 
+Benchmarked functions `sum` (sum of elements in a list) and `fib` (fibonacci number) are pretty
+straightforward, we simply `replicateM` them many times or `mapM` same functions over a
+list. Although `scheduler` is already pretty good at it, it does look like there might be some room
+for improvement. `pooled*` functions from `unliftio` have the best performance, and I don't think
+they can be made any faster for such workloads, but they do not allow submitting more work during
+computation, as such nested parallelism while reusing the same workers is impossible, thus
+functionally they are inferior.
+
+Benchmarks can be reproduced with `stack bench` inside this repo.
 
 ```
 scheduler-1.1.0: benchmarks
