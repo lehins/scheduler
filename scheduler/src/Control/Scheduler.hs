@@ -238,7 +238,6 @@ withSchedulerInternal comp submitWork collect onScheduler = do
               catch
                 (unmask $ run $ runWorker jobsQueue onRetire)
                 (run . handleWorkerException jobsQueue workDoneMVar jobsNumWorkers)
-      --{-# INLINE spawnWorkersWith #-}
       spawnWorkers =
         case comp of
           Seq -> return []
@@ -246,7 +245,6 @@ withSchedulerInternal comp submitWork collect onScheduler = do
           Par -> spawnWorkersWith forkOnWithUnmask [1 .. jobsNumWorkers]
           ParOn ws -> spawnWorkersWith forkOnWithUnmask ws
           ParN _ -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 .. jobsNumWorkers]
-      --{-# INLINE spawnWorkers #-}
       doWork = do
         when (comp == Seq) $ runWorker jobsQueue onRetire
         mExc <- liftIO $ readMVar workDoneMVar
@@ -259,7 +257,6 @@ withSchedulerInternal comp submitWork collect onScheduler = do
           Just (WorkerException exc) -> liftIO $ throwIO exc
           -- \ Here we need to unwrap the legit worker exception and rethrow it, so the main thread
           -- will think like it's his own
-      --{-# INLINE doWork #-}
   safeBracketOnError
     spawnWorkers
     (liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException))
