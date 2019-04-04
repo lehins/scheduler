@@ -13,12 +13,22 @@
 -- Portability : non-portable
 --
 module Control.Scheduler
-  ( -- * Scheduler and strategies
-    Comp(..)
-  , Scheduler(..)
+  (
+    -- * Scheduler
+    Scheduler
+  , numWorkers
+  , scheduleWork
+  , scheduleWork_
+  , terminate
+  , terminate_
+  , terminateWith
   -- * Initialize Scheduler
   , withScheduler
   , withScheduler_
+  , trivialScheduler_
+  -- * Computation strategies
+  , Comp(..)
+  , getCompWorkers
   -- * Useful functions
   , replicateConcurrently
   , replicateConcurrently_
@@ -31,14 +41,16 @@ module Control.Scheduler
 
 import Control.Concurrent
 import Control.Exception
-import Control.Scheduler.Computation
-import Control.Scheduler.Queue
 import Control.Monad
 import Control.Monad.IO.Unlift
+import Control.Scheduler.Computation
+import Control.Scheduler.Queue
 import Data.Atomics (atomicModifyIORefCAS, atomicModifyIORefCAS_)
 import qualified Data.Foldable as F (foldl', traverse_)
 import Data.IORef
 import Data.Traversable
+import Data.Maybe (catMaybes)
+
 
 data Jobs m a = Jobs
   { jobsNumWorkers :: {-# UNPACK #-} !Int
@@ -46,16 +58,73 @@ data Jobs m a = Jobs
   , jobsCountRef   :: !(IORef Int)
   }
 
--- | Main type for scheduling work. See `withScheduler` or `withScheduler_` for the only ways to get
--- access to such data type.
+-- | Main type for scheduling work. See `withScheduler` or `withScheduler_` for ways to construct
+-- and use this data type.
 --
 -- @since 1.0.0
 data Scheduler m a = Scheduler
-  { numWorkers   :: {-# UNPACK #-} !Int
-  -- ^ Get the number of workers.
-  , scheduleWork :: m a -> m ()
-  -- ^ Schedule an action to be picked up and computed by a worker from a pool.
+  { numWorkers    :: {-# UNPACK #-} !Int
+  -- ^ Get the number of workers. Will mainly depend on the computation strategy and/or number of
+  -- capabilities you have. Related function is `getCompWorkers`.
+  --
+  -- @since 1.0.0
+  , scheduleWork  :: m a -> m ()
+  -- ^ Schedule an action to be picked up and computed by a worker from a pool of jobs.
+  --
+  -- @since 1.0.0
+  , terminate     :: a -> m a
+  -- ^ As soon as possible try to terminate any computation that is being performed by all workers
+  -- managed by this scheduler and collect whatever results have been computed, with supplied
+  -- element guaranteed to being the last one.
+  --
+  -- /Important/ - With `Seq` strategy this will not stop other scheduled tasks from being computed,
+  -- although it will make sure their results are discarded.
+  --
+  -- @since 1.1.0
+  , terminateWith :: a -> m a
+  -- ^ Same as `terminate`, but returning a single element list containing the supplied
+  -- argument. This can be very useful for parallel search algorithms.
+  --
+  -- /Important/ - Same as with `terminate`, when `Seq` strategy is used, this will not prevent
+  -- computation from continuing, but the scheduler will return only the result supplied to this
+  -- function.
+  --
+  -- @since 1.1.0
   }
+
+-- | Same as `scheduleWork`, but only for a `Scheduler` that doesn't keep the result.
+--
+-- @since 1.1.0
+scheduleWork_ :: Scheduler m () -> m () -> m ()
+scheduleWork_ = scheduleWork
+
+-- | Similar to `terminate`, but for a `Scheduler` that does not keep any results of computation.
+--
+-- /Important/ - In case of `Seq` computation strategy this function has no affect.
+--
+-- @since 1.1.0
+terminate_ :: Scheduler m () -> m ()
+terminate_ = (`terminateWith` ())
+
+-- | The most basic scheduler that simply runs the task instead of scheduling it. Early termination
+-- requests are simply ignored.
+--
+-- @since 1.1.0
+trivialScheduler_ :: Applicative f => Scheduler f ()
+trivialScheduler_ = Scheduler
+  { numWorkers = 1
+  , scheduleWork = id
+  , terminate = const $ pure ()
+  , terminateWith = const $ pure ()
+  }
+
+
+data SchedulerOutcome a
+  = SchedulerFinished
+  | SchedulerTerminatedEarly ![a]
+  | SchedulerWorkerException WorkerException
+
+
 
 -- | This is generally a faster way to traverse while ignoring the result rather than using `mapM_`.
 --
@@ -113,14 +182,16 @@ scheduleJobs_ :: MonadIO m => Jobs m a -> m b -> m ()
 scheduleJobs_ = scheduleJobsWith (return . Job_ . void)
 
 scheduleJobsWith :: MonadIO m => (m b -> m (Job m a)) -> Jobs m a -> m b -> m ()
-scheduleJobsWith mkJob' Jobs {jobsQueue, jobsCountRef, jobsNumWorkers} action = do
-  liftIO $ atomicModifyIORefCAS_ jobsCountRef (+ 1)
+scheduleJobsWith mkJob' jobs action = do
+  liftIO $ atomicModifyIORefCAS_ (jobsCountRef jobs) (+ 1)
   job <-
     mkJob' $ do
       res <- action
-      res `seq` dropCounterOnZero jobsCountRef $ retireWorkersN jobsQueue jobsNumWorkers
+      res `seq`
+        dropCounterOnZero (jobsCountRef jobs) $
+        retireWorkersN (jobsQueue jobs) (jobsNumWorkers jobs)
       return res
-  pushJQueue jobsQueue job
+  pushJQueue (jobsQueue jobs) job
 
 -- | Helper function to place required number of @Retire@ instructions on the job queue.
 retireWorkersN :: MonadIO m => JQueue m a -> Int -> m ()
@@ -139,7 +210,7 @@ dropCounterOnZero counterRef onZero = do
   when (jc == 0) onZero
 
 
--- | Runs the worker until the job queue is exhausted, at which point it will exhecute the final task
+-- | Runs the worker until the job queue is exhausted, at which point it will execute the final task
 -- of retirement and return
 runWorker :: MonadIO m =>
              JQueue m a
@@ -166,8 +237,8 @@ runWorker jQueue onRetire = go
 -- * It is ok to initialize multiple schedulers at the same time, although that will likely result
 --   in suboptimal performance, unless workers are pinned to different capabilities.
 --
--- * __Warning__ It is very dangerous to schedule jobs that do blocking `IO`, since it can lead to a
---   deadlock very quickly, if you are not careful. Consider this example. First execution works fine,
+-- * __Warning__ It is pretty dangerous to schedule jobs that do blocking `IO`, since it can easily
+--   lead to deadlock, if you are not careful. Consider this example. First execution works fine,
 --   since there are two scheduled workers, and one can unblock the other, but the second scenario
 --   immediately results in a deadlock.
 --
@@ -187,7 +258,7 @@ withScheduler ::
   -> (Scheduler m a -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m [a]
-withScheduler comp = withSchedulerInternal comp scheduleJobs flushResults
+withScheduler comp = withSchedulerInternal comp scheduleJobs readResults reverse
 
 
 -- | Same as `withScheduler`, but discards results of submitted jobs.
@@ -199,32 +270,42 @@ withScheduler_ ::
   -> (Scheduler m a -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m ()
-withScheduler_ comp = withSchedulerInternal comp scheduleJobs_ (const (pure ()))
-
+withScheduler_ comp = void . withSchedulerInternal comp scheduleJobs_ (const (pure [])) id
 
 withSchedulerInternal ::
      MonadUnliftIO m
   => Comp -- ^ Computation strategy
   -> (Jobs m a -> m a -> m ()) -- ^ How to schedule work
-  -> (JQueue m a -> m c) -- ^ How to collect results
+  -> (JQueue m a -> m [Maybe a]) -- ^ How to collect results
+  -> ([a] -> [a]) -- ^ Adjust results in some way
   -> (Scheduler m a -> m b)
      -- ^ Action that will be scheduling all the work.
-  -> m c
-withSchedulerInternal comp submitWork collect onScheduler = do
-  jobsNumWorkers <-
-    case comp of
-      Seq      -> return 1
-      Par      -> liftIO getNumCapabilities
-      ParOn ws -> return $ length ws
-      ParN 0   -> liftIO getNumCapabilities
-      ParN n   -> return $ fromIntegral n
+  -> m [a]
+withSchedulerInternal comp submitWork collect adjust onScheduler = do
+  jobsNumWorkers <- getCompWorkers comp
   sWorkersCounterRef <- liftIO $ newIORef jobsNumWorkers
   jobsQueue <- newJQueue
   jobsCountRef <- liftIO $ newIORef 0
   workDoneMVar <- liftIO newEmptyMVar
   let jobs = Jobs {..}
-      scheduler = Scheduler {numWorkers = jobsNumWorkers, scheduleWork = submitWork jobs}
-      onRetire = dropCounterOnZero sWorkersCounterRef $ liftIO (putMVar workDoneMVar Nothing)
+      scheduler =
+        Scheduler
+          { numWorkers = jobsNumWorkers
+          , scheduleWork = submitWork jobs
+          , terminate =
+              \a -> do
+                mas <- collect jobsQueue
+                let as = adjust (a : catMaybes mas)
+                liftIO $ void $ tryPutMVar workDoneMVar $ SchedulerTerminatedEarly as
+                pure a
+          , terminateWith =
+              \a -> do
+                liftIO $ void $ tryPutMVar workDoneMVar $ SchedulerTerminatedEarly [a]
+                pure a
+          }
+      onRetire =
+        dropCounterOnZero sWorkersCounterRef $
+        void $ liftIO (tryPutMVar workDoneMVar SchedulerFinished)
   -- / Wait for the initial jobs to get scheduled before spawining off the workers, otherwise it
   -- would be trickier to identify the beginning and the end of a job pool.
   _ <- onScheduler scheduler
@@ -245,50 +326,44 @@ withSchedulerInternal comp submitWork collect onScheduler = do
           Par -> spawnWorkersWith forkOnWithUnmask [1 .. jobsNumWorkers]
           ParOn ws -> spawnWorkersWith forkOnWithUnmask ws
           ParN _ -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 .. jobsNumWorkers]
-      doWork = do
+      terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
+      doWork tids = do
         when (comp == Seq) $ runWorker jobsQueue onRetire
         mExc <- liftIO $ readMVar workDoneMVar
         -- \ wait for all worker to finish. If any one of them had a problem this MVar will
         -- contain an exception
         case mExc of
-          Nothing                    -> collect jobsQueue
+          SchedulerFinished -> adjust . catMaybes <$> collect jobsQueue
           -- \ Now we are sure all workers have done their job we can safely read all of the
           -- IORefs with results
-          Just (WorkerException exc) -> liftIO $ throwIO exc
+          SchedulerTerminatedEarly as -> terminateWorkers tids >> pure as
+          SchedulerWorkerException (WorkerException exc) -> liftIO $ throwIO exc
           -- \ Here we need to unwrap the legit worker exception and rethrow it, so the main thread
           -- will think like it's his own
-  safeBracketOnError
-    spawnWorkers
-    (liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException))
-    (const doWork)
+  safeBracketOnError spawnWorkers terminateWorkers doWork
 
 
 -- | Specialized exception handler for the work scheduler.
 handleWorkerException ::
-  MonadIO m => JQueue m a -> MVar (Maybe WorkerException) -> Int -> SomeException -> m ()
+  MonadIO m => JQueue m a -> MVar (SchedulerOutcome a) -> Int -> SomeException -> m ()
 handleWorkerException jQueue workDoneMVar nWorkers exc =
   case asyncExceptionFromException exc of
     Just WorkerTerminateException -> return ()
       -- \ some co-worker died, we can just move on with our death.
     _ -> do
-      _ <- liftIO $ tryPutMVar workDoneMVar $ Just $ WorkerException exc
+      _ <- liftIO $ tryPutMVar workDoneMVar $ SchedulerWorkerException $ WorkerException exc
       -- \ Main thread must know how we died
       -- / Do the co-worker cleanup
       retireWorkersN jQueue (nWorkers - 1)
 
 
--- | This exception should normally be not seen in the wild. The only one that could possibly pop up
--- is the `WorkerAsyncException`.
+-- | This exception should normally be never seen in the wild and is for internal use only.
 newtype WorkerException =
   WorkerException SomeException
   -- ^ One of workers experienced an exception, main thread will receive the same `SomeException`.
   deriving (Show)
 
-instance Exception WorkerException where
-  displayException workerExc =
-    case workerExc of
-      WorkerException exc ->
-        "A worker handled a job that ended with exception: " ++ displayException exc
+instance Exception WorkerException
 
 data WorkerTerminateException =
   WorkerTerminateException
@@ -297,9 +372,7 @@ data WorkerTerminateException =
   deriving (Show)
 
 
-instance Exception WorkerTerminateException where
-  displayException WorkerTerminateException = "A worker was terminated by the scheduler"
-
+instance Exception WorkerTerminateException
 
 -- Copy from unliftio:
 safeBracketOnError :: MonadUnliftIO m => m a -> (a -> m b) -> (a -> m c) -> m c

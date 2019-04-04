@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 -- |
@@ -10,10 +11,12 @@
 -- Portability : non-portable
 --
 module Control.Scheduler.Computation
-  ( Comp(.., Par)
+  ( Comp(.., Par, Par'), getCompWorkers
   ) where
 
+import Control.Concurrent (getNumCapabilities)
 import Control.DeepSeq (NFData(..), deepseq)
+import Control.Monad.IO.Class
 #if !MIN_VERSION_base(4,11,0)
 import Data.Semigroup
 #endif
@@ -32,9 +35,18 @@ data Comp
   deriving Eq
 
 -- | Parallel computation using all available cores. Same as @`ParOn` []@
+--
+-- @since 1.0.0
 pattern Par :: Comp
 pattern Par <- ParOn [] where
         Par =  ParOn []
+
+-- | Parallel computation using all available cores. Same as @`ParN` 0@
+--
+-- @since 1.1.0
+pattern Par' :: Comp
+pattern Par' <- ParN 0 where
+        Par' =  ParN 0
 
 instance Show Comp where
   show Seq        = "Seq"
@@ -69,18 +81,30 @@ joinComp x y =
   case x of
     Seq -> y
     Par -> Par
+    ParN 0 -> ParN 0
     ParOn xs ->
       case y of
-        Seq      -> x
         Par      -> Par
-        ParOn ys -> ParOn (xs ++ ys)
         ParN 0   -> ParN 0
-        ParN n2  -> ParN (max (fromIntegral (length xs)) n2)
-    ParN 0 -> ParN 0
+        ParOn ys -> ParOn (xs <> ys)
+        _        -> x
     ParN n1 ->
       case y of
-        Seq      -> x
-        Par      -> Par
-        ParOn ys -> ParN (max n1 (fromIntegral (length ys)))
-        ParN n2  -> ParN (max n1 n2)
+        Seq     -> x
+        Par     -> Par
+        ParOn _ -> y
+        ParN 0  -> y
+        ParN n2 -> ParN (max n1 n2)
 {-# NOINLINE joinComp #-}
+
+-- | Figure out how many workers will this computation strategy create
+--
+-- @since 1.1.0
+getCompWorkers :: MonadIO m => Comp -> m Int
+getCompWorkers =
+  \case
+    Seq -> return 1
+    Par -> liftIO getNumCapabilities
+    ParOn ws -> return $ length ws
+    ParN 0 -> liftIO getNumCapabilities
+    ParN n -> return $ fromIntegral n
