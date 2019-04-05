@@ -76,6 +76,13 @@ prop_Nested comp xs =
     schedule (y:ys) =
       withScheduler comp (\s -> scheduleWork s (schedule ys >>= \ys' -> return (y : concat ys')))
 
+-- | Check whether all jobs have been completed (similar roprop_Traverse)
+prop_AllJobsProcessed :: Comp -> [Int] -> Property
+prop_AllJobsProcessed comp jobs =
+  monadicIO
+    ((=== jobs) <$>
+     run (withScheduler comp $ \scheduler -> mapM_ (scheduleWork scheduler . pure) jobs))
+
 prop_Traverse :: Comp -> [Int] -> Fun Int Int -> Property
 prop_Traverse comp xs f =
   concurrentProperty $ (===) <$> traverse f' xs <*> traverseConcurrently comp f' xs
@@ -89,6 +96,7 @@ prop_Traverse comp xs f =
 --   (===) <$> traverse f' xs <*> traverseConcurrently comp f' xs
 --   where
 --     f' = pure . apply f
+
 
 prop_ArbitraryCompNested :: [(Comp, Int)] -> Property
 prop_ArbitraryCompNested xs =
@@ -307,6 +315,7 @@ spec = do
     it "Serially" $ timed $ \cs -> prop_Serially (ParOn cs)
   describe "Arbitrary Comp" $ do
     it "ArbitraryNested" $ timed prop_ArbitraryCompNested
+    it "AllJobsProcessed" $ timed prop_AllJobsProcessed
     it "traverseConcurrently == traverse" $ timed prop_Traverse
     --it "replicateConcurrently == replicateM" $ timed prop_ReplicateM
   describe "Exceptions" $ do
