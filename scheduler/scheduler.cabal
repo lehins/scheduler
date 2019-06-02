@@ -11,6 +11,7 @@ copyright:           2018-2019 Alexey Kuleshevich
 category:            Parallelism, Concurrency
 build-type:          Custom
 extra-source-files:  README.md
+                   , CHANGELOG.md
 cabal-version:       >=1.10
 
 custom-setup
