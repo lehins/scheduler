@@ -19,6 +19,8 @@ module Control.Scheduler
   , numWorkers
   , scheduleWork
   , scheduleWork_
+  , scheduleWorkId
+  , scheduleWorkId_
   , terminate
   , terminate_
   , terminateWith
@@ -48,8 +50,8 @@ import Control.Scheduler.Queue
 import Data.Atomics (atomicModifyIORefCAS, atomicModifyIORefCAS_)
 import qualified Data.Foldable as F (foldl', traverse_)
 import Data.IORef
-import Data.Traversable
 import Data.Maybe (catMaybes)
+import Data.Traversable
 
 
 data Jobs m a = Jobs
@@ -63,16 +65,17 @@ data Jobs m a = Jobs
 --
 -- @since 1.0.0
 data Scheduler m a = Scheduler
-  { numWorkers    :: {-# UNPACK #-} !Int
+  { numWorkers     :: {-# UNPACK #-} !Int
   -- ^ Get the number of workers. Will mainly depend on the computation strategy and/or number of
   -- capabilities you have. Related function is `getCompWorkers`.
   --
   -- @since 1.0.0
-  , scheduleWork  :: m a -> m ()
-  -- ^ Schedule an action to be picked up and computed by a worker from a pool of jobs.
+  , scheduleWorkId :: (Int -> m a) -> m ()
+  -- ^ Schedule an action to be picked up and computed by a worker from a pool of
+  -- jobs. Argument supplied to the job will be the id of the worker doing the job.
   --
-  -- @since 1.0.0
-  , terminate     :: a -> m a
+  -- @since 1.2.0
+  , terminate      :: a -> m a
   -- ^ As soon as possible try to terminate any computation that is being performed by all workers
   -- managed by this scheduler and collect whatever results have been computed, with supplied
   -- element guaranteed to being the last one.
@@ -81,7 +84,7 @@ data Scheduler m a = Scheduler
   -- although it will make sure their results are discarded.
   --
   -- @since 1.1.0
-  , terminateWith :: a -> m a
+  , terminateWith  :: a -> m a
   -- ^ Same as `terminate`, but returning a single element list containing the supplied
   -- argument. This can be very useful for parallel search algorithms.
   --
@@ -92,11 +95,25 @@ data Scheduler m a = Scheduler
   -- @since 1.1.0
   }
 
--- | Same as `scheduleWork`, but only for a `Scheduler` that doesn't keep the result.
+
+-- | Schedule an action to be picked up and computed by a worker from a pool of
+-- jobs. Similar to `scheduleWorkId`, except the job doesn't get the worker id.
+--
+-- @since 1.0.0
+scheduleWork :: Scheduler m a -> m a -> m ()
+scheduleWork scheduler f = scheduleWorkId scheduler (const f)
+
+-- | Same as `scheduleWork`, but only for a `Scheduler` that doesn't keep the results.
 --
 -- @since 1.1.0
 scheduleWork_ :: Scheduler m () -> m () -> m ()
 scheduleWork_ = scheduleWork
+
+-- | Same as `scheduleWorkId`, but only for a `Scheduler` that doesn't keep the results.
+--
+-- @since 1.2.0
+scheduleWorkId_ :: Scheduler m () -> (Int -> m ()) -> m ()
+scheduleWorkId_ = scheduleWorkId
 
 -- | Similar to `terminate`, but for a `Scheduler` that does not keep any results of computation.
 --
@@ -113,7 +130,7 @@ terminate_ = (`terminateWith` ())
 trivialScheduler_ :: Applicative f => Scheduler f ()
 trivialScheduler_ = Scheduler
   { numWorkers = 1
-  , scheduleWork = id
+  , scheduleWorkId = \f -> f 0
   , terminate = const $ pure ()
   , terminateWith = const $ pure ()
   }
@@ -172,21 +189,21 @@ replicateConcurrently_ comp n f =
   withScheduler_ comp $ \s -> scheduleWork s $ replicateM_ n (scheduleWork s $ void f)
 
 
-scheduleJobs :: MonadIO m => Jobs m a -> m a -> m ()
+scheduleJobs :: MonadIO m => Jobs m a -> (Int -> m a) -> m ()
 scheduleJobs = scheduleJobsWith mkJob
 
 -- | Similarly to `scheduleWork`, but ignores the result of computation, thus having less overhead.
 --
 -- @since 1.0.0
-scheduleJobs_ :: MonadIO m => Jobs m a -> m b -> m ()
-scheduleJobs_ = scheduleJobsWith (return . Job_ . void)
+scheduleJobs_ :: MonadIO m => Jobs m a -> (Int -> m b) -> m ()
+scheduleJobs_ = scheduleJobsWith (\job -> pure (Job_ (void . job)))
 
-scheduleJobsWith :: MonadIO m => (m b -> m (Job m a)) -> Jobs m a -> m b -> m ()
+scheduleJobsWith :: MonadIO m => ((Int -> m b) -> m (Job m a)) -> Jobs m a -> (Int -> m b) -> m ()
 scheduleJobsWith mkJob' jobs action = do
   liftIO $ atomicModifyIORefCAS_ (jobsCountRef jobs) (+ 1)
   job <-
-    mkJob' $ do
-      res <- action
+    mkJob' $ \ i -> do
+      res <- action i
       res `seq`
         dropCounterOnZero (jobsCountRef jobs) $
         retireWorkersN (jobsQueue jobs) (jobsNumWorkers jobs)
@@ -213,14 +230,15 @@ dropCounterOnZero counterRef onZero = do
 -- | Runs the worker until the job queue is exhausted, at which point it will execute the final task
 -- of retirement and return
 runWorker :: MonadIO m =>
-             JQueue m a
+             Int
+          -> JQueue m a
           -> m () -- ^ Action to run upon retirement
           -> m ()
-runWorker jQueue onRetire = go
+runWorker wId jQueue onRetire = go
   where
     go =
       popJQueue jQueue >>= \case
-        Just job -> job >> go
+        Just job -> job wId >> go
         Nothing -> onRetire
 
 
@@ -275,7 +293,7 @@ withScheduler_ comp = void . withSchedulerInternal comp scheduleJobs_ (const (pu
 withSchedulerInternal ::
      MonadUnliftIO m
   => Comp -- ^ Computation strategy
-  -> (Jobs m a -> m a -> m ()) -- ^ How to schedule work
+  -> (Jobs m a -> (Int -> m a) -> m ()) -- ^ How to schedule work
   -> (JQueue m a -> m [Maybe a]) -- ^ How to collect results
   -> ([a] -> [a]) -- ^ Adjust results in some way
   -> (Scheduler m a -> m b)
@@ -291,7 +309,7 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
       scheduler =
         Scheduler
           { numWorkers = jobsNumWorkers
-          , scheduleWork = submitWork jobs
+          , scheduleWorkId = submitWork jobs
           , terminate =
               \a -> do
                 mas <- collect jobsQueue
@@ -311,24 +329,24 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
   _ <- onScheduler scheduler
   -- / Ensure at least something gets scheduled, so retirement can be triggered
   jc <- liftIO $ readIORef jobsCountRef
-  when (jc == 0) $ scheduleJobs_ jobs (pure ())
+  when (jc == 0) $ scheduleJobs_ jobs (\_ -> pure ())
   let spawnWorkersWith fork ws =
         withRunInIO $ \run ->
           forM ws $ \w ->
             fork w $ \unmask ->
               catch
-                (unmask $ run $ runWorker jobsQueue onRetire)
+                (unmask $ run $ runWorker w jobsQueue onRetire)
                 (run . handleWorkerException jobsQueue workDoneMVar jobsNumWorkers)
       spawnWorkers =
         case comp of
           Seq -> return []
             -- \ no need to fork threads for a sequential computation
-          Par -> spawnWorkersWith forkOnWithUnmask [1 .. jobsNumWorkers]
+          Par -> spawnWorkersWith forkOnWithUnmask [0 .. jobsNumWorkers - 1]
           ParOn ws -> spawnWorkersWith forkOnWithUnmask ws
-          ParN _ -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 .. jobsNumWorkers]
+          ParN _ -> spawnWorkersWith (\_ -> forkIOWithUnmask) [0 .. jobsNumWorkers - 1]
       terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
       doWork tids = do
-        when (comp == Seq) $ runWorker jobsQueue onRetire
+        when (comp == Seq) $ runWorker 0 jobsQueue onRetire
         mExc <- liftIO $ readMVar workDoneMVar
         -- \ wait for all worker to finish. If any one of them had a problem this MVar will
         -- contain an exception

@@ -1,3 +1,7 @@
+# 1.2.0
+
+* Addition of `scheduleWorkId` and `scheduleWorkId_`
+
 # 1.1.0
 
 * Add functions: `replicateConcurrently` and `replicateConcurrently_`

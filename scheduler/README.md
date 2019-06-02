@@ -71,6 +71,22 @@ the same order they've been scheduled:
 [11,22,33,44,55]
 ```
 
+### Identify workers doing the work
+
+Since version `scheduler-1.2.0` it is possible to identify which worker is doing the
+job. This is especially useful for limiting resources to particular workers that should
+not be shared between separate threads.
+
+```haskell
+λ> let scheduleId = (`scheduleWorkId` (\ i -> threadDelay 100000 >> pure i))
+λ> withScheduler (ParOn [4,7,5]) $ \s -> scheduleId s >> scheduleId s >> scheduleId s
+[4,7,5]
+λ> withScheduler (ParN 3) $ \s -> scheduleId s >> scheduleId s >> scheduleId s
+[1,2,0]
+λ> withScheduler (ParN 3) $ \s -> scheduleId s >> scheduleId s >> scheduleId s
+[0,1,2]
+```
+
 ### Exceptions
 
 Whenever any of the scheduled jobs result in an exception, all of the workers will be killed and the

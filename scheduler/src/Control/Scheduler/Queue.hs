@@ -43,17 +43,17 @@ popQueue queue =
         y:ys -> Just (y, queue {qQueue = ys, qStack = []})
 
 data Job m a
-  = Job !(IORef (Maybe a)) !(m a)
-  | Job_ !(m ())
+  = Job !(IORef (Maybe a)) (Int -> m a)
+  | Job_ (Int -> m ())
   | Retire
 
 
-mkJob :: MonadIO m => m a -> m (Job m a)
+mkJob :: MonadIO m => (Int -> m a) -> m (Job m a)
 mkJob action = do
   resRef <- liftIO $ newIORef Nothing
   return $!
-    Job resRef $ do
-      res <- action
+    Job resRef $ \ i -> do
+      res <- action i
       liftIO $ writeIORef resRef $ Just res
       return $! res
 
@@ -85,7 +85,7 @@ pushJQueue (JQueue jQueueRef) job =
            , liftIO $ putMVar qBaton ()))
 
 
-popJQueue :: MonadIO m => JQueue m a -> m (Maybe (m ()))
+popJQueue :: MonadIO m => JQueue m a -> m (Maybe (Int -> m ()))
 popJQueue (JQueue jQueueRef) = liftIO inner
   where
     inner =
@@ -96,7 +96,7 @@ popJQueue (JQueue jQueueRef) = liftIO inner
           Just (job, newQueue) ->
             ( newQueue
             , case job of
-                Job _ action -> return $ Just (void action)
+                Job _ action -> return $ Just (void . action)
                 Job_ action_ -> return $ Just action_
                 Retire       -> return Nothing)
 
