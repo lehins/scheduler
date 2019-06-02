@@ -65,35 +65,49 @@ data Jobs m a = Jobs
 --
 -- @since 1.0.0
 data Scheduler m a = Scheduler
-  { numWorkers     :: {-# UNPACK #-} !Int
-  -- ^ Get the number of workers. Will mainly depend on the computation strategy and/or number of
-  -- capabilities you have. Related function is `getCompWorkers`.
-  --
-  -- @since 1.0.0
-  , scheduleWorkId :: (Int -> m a) -> m ()
-  -- ^ Schedule an action to be picked up and computed by a worker from a pool of
-  -- jobs. Argument supplied to the job will be the id of the worker doing the job.
-  --
-  -- @since 1.2.0
-  , terminate      :: a -> m a
-  -- ^ As soon as possible try to terminate any computation that is being performed by all workers
-  -- managed by this scheduler and collect whatever results have been computed, with supplied
-  -- element guaranteed to being the last one.
-  --
-  -- /Important/ - With `Seq` strategy this will not stop other scheduled tasks from being computed,
-  -- although it will make sure their results are discarded.
-  --
-  -- @since 1.1.0
-  , terminateWith  :: a -> m a
-  -- ^ Same as `terminate`, but returning a single element list containing the supplied
-  -- argument. This can be very useful for parallel search algorithms.
-  --
-  -- /Important/ - Same as with `terminate`, when `Seq` strategy is used, this will not prevent
-  -- computation from continuing, but the scheduler will return only the result supplied to this
-  -- function.
-  --
-  -- @since 1.1.0
+  { _numWorkers     :: {-# UNPACK #-} !Int
+  , _scheduleWorkId :: (Int -> m a) -> m ()
+  , _terminate      :: a -> m a
+  , _terminateWith  :: a -> m a
   }
+
+
+-- ^ Get the number of workers. Will mainly depend on the computation strategy and/or number of
+-- capabilities you have. Related function is `getCompWorkers`.
+--
+-- @since 1.0.0
+numWorkers :: Scheduler m a -> Int
+numWorkers = _numWorkers
+
+
+-- | Schedule an action to be picked up and computed by a worker from a pool of
+-- jobs. Argument supplied to the job will be the id of the worker doing the job.
+--
+-- @since 1.2.0
+scheduleWorkId :: Scheduler m a -> (Int -> m a) -> m ()
+scheduleWorkId =_scheduleWorkId
+
+-- | As soon as possible try to terminate any computation that is being performed by all workers
+-- managed by this scheduler and collect whatever results have been computed, with supplied
+-- element guaranteed to being the last one.
+--
+-- /Important/ - With `Seq` strategy this will not stop other scheduled tasks from being computed,
+-- although it will make sure their results are discarded.
+--
+-- @since 1.1.0
+terminate :: Scheduler m a -> a -> m a
+terminate = _terminate
+
+-- | Same as `terminate`, but returning a single element list containing the supplied
+-- argument. This can be very useful for parallel search algorithms.
+--
+-- /Important/ - Same as with `terminate`, when `Seq` strategy is used, this will not prevent
+-- computation from continuing, but the scheduler will return only the result supplied to this
+-- function.
+--
+-- @since 1.1.0
+terminateWith :: Scheduler m a -> a -> m a
+terminateWith = _terminateWith
 
 
 -- | Schedule an action to be picked up and computed by a worker from a pool of
@@ -101,7 +115,7 @@ data Scheduler m a = Scheduler
 --
 -- @since 1.0.0
 scheduleWork :: Scheduler m a -> m a -> m ()
-scheduleWork scheduler f = scheduleWorkId scheduler (const f)
+scheduleWork scheduler f = _scheduleWorkId scheduler (const f)
 
 -- | Same as `scheduleWork`, but only for a `Scheduler` that doesn't keep the results.
 --
@@ -113,7 +127,7 @@ scheduleWork_ = scheduleWork
 --
 -- @since 1.2.0
 scheduleWorkId_ :: Scheduler m () -> (Int -> m ()) -> m ()
-scheduleWorkId_ = scheduleWorkId
+scheduleWorkId_ = _scheduleWorkId
 
 -- | Similar to `terminate`, but for a `Scheduler` that does not keep any results of computation.
 --
@@ -121,7 +135,7 @@ scheduleWorkId_ = scheduleWorkId
 --
 -- @since 1.1.0
 terminate_ :: Scheduler m () -> m ()
-terminate_ = (`terminateWith` ())
+terminate_ = (`_terminateWith` ())
 
 -- | The most basic scheduler that simply runs the task instead of scheduling it. Early termination
 -- requests are simply ignored.
@@ -129,10 +143,10 @@ terminate_ = (`terminateWith` ())
 -- @since 1.1.0
 trivialScheduler_ :: Applicative f => Scheduler f ()
 trivialScheduler_ = Scheduler
-  { numWorkers = 1
-  , scheduleWorkId = \f -> f 0
-  , terminate = const $ pure ()
-  , terminateWith = const $ pure ()
+  { _numWorkers = 1
+  , _scheduleWorkId = \f -> f 0
+  , _terminate = const $ pure ()
+  , _terminateWith = const $ pure ()
   }
 
 
@@ -308,15 +322,15 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
   let jobs = Jobs {..}
       scheduler =
         Scheduler
-          { numWorkers = jobsNumWorkers
-          , scheduleWorkId = submitWork jobs
-          , terminate =
+          { _numWorkers = jobsNumWorkers
+          , _scheduleWorkId = submitWork jobs
+          , _terminate =
               \a -> do
                 mas <- collect jobsQueue
                 let as = adjust (a : catMaybes mas)
                 liftIO $ void $ tryPutMVar workDoneMVar $ SchedulerTerminatedEarly as
                 pure a
-          , terminateWith =
+          , _terminateWith =
               \a -> do
                 liftIO $ void $ tryPutMVar workDoneMVar $ SchedulerTerminatedEarly [a]
                 pure a

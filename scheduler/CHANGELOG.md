@@ -1,3 +1,10 @@
+# 1.3.0
+
+* Make sure internal `Scheduler` accessor functions are no longer exported, they only
+  cause breakage.
+* Make sure number of capabilities does not change through out the program execution, as
+  far as `scheduler` is concerned.
+
 # 1.2.0
 
 * Addition of `scheduleWorkId` and `scheduleWorkId_`

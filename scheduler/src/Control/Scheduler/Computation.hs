@@ -20,7 +20,9 @@ import Control.Monad.IO.Class
 #if !MIN_VERSION_base(4,11,0)
 import Data.Semigroup
 #endif
+import Data.IORef
 import Data.Word
+import System.IO.Unsafe (unsafePerformIO)
 
 -- | Computation strategy to use when scheduling work.
 data Comp
@@ -97,14 +99,24 @@ joinComp x y =
         ParN n2 -> ParN (max n1 n2)
 {-# NOINLINE joinComp #-}
 
--- | Figure out how many workers will this computation strategy create
+numCapsRef :: IORef Int
+numCapsRef = unsafePerformIO $ do
+  caps <- getNumCapabilities
+  newIORef caps
+{-# NOINLINE numCapsRef #-}
+
+-- | Figure out how many workers will this computation strategy create.
+--
+-- /Note/ - If at any point during program execution global number of capabilities gets
+-- changed with `Control.Concurrent.setNumCapabilities`, it will have no affect on this
+-- function, unless it hasn't yet been called with `Par` or `ParN` 0 arguments.
 --
 -- @since 1.1.0
 getCompWorkers :: MonadIO m => Comp -> m Int
 getCompWorkers =
   \case
     Seq -> return 1
-    Par -> liftIO getNumCapabilities
+    Par -> liftIO (readIORef numCapsRef)
     ParOn ws -> return $ length ws
-    ParN 0 -> liftIO getNumCapabilities
+    ParN 0 -> liftIO (readIORef numCapsRef)
     ParN n -> return $ fromIntegral n
