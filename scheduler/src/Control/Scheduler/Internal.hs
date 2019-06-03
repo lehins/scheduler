@@ -16,6 +16,7 @@ module Control.Scheduler.Internal
   , SchedulerOutcome(..)
   , WorkerException(..)
   , WorkerTerminateException(..)
+  , MutexException(..)
   ) where
 
 import Control.Exception
@@ -87,3 +88,12 @@ data WorkerTerminateException =
 
 
 instance Exception WorkerTerminateException
+
+
+data MutexException =
+  MutexException
+  deriving (Eq, Show)
+
+instance Exception MutexException where
+  displayException MutexException =
+    "MutexException: WorkerStates cannot be used at the same time by different schedulers"

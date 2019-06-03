@@ -49,6 +49,7 @@ module Control.Scheduler
   , traverse_
   -- * Exceptions
   -- $exceptions
+  , MutexException(..)
   ) where
 
 import Control.Concurrent
@@ -73,7 +74,7 @@ withoutStates :: SchedulerS s m a -> Scheduler m a
 withoutStates = _getScheduler
 
 
--- | Initilize a separate state for each worker.
+-- | Initialize a separate state for each worker.
 --
 -- @since 1.4.0
 initWorkerStates :: MonadIO m => Comp -> (WorkerId -> m s) -> m (WorkerStates s)
@@ -88,7 +89,9 @@ initWorkerStates comp initState = do
       , _workerStatesMutex = mutex
       }
 
--- | Run a scheduler with stateful workers
+-- | Run a scheduler with stateful workers. Throws `MutexException` if an attempt is made
+-- to concurrently use the same `WorkerState` with another `SchedulerS`.
+--
 --
 -- @since 1.4.0
 withSchedulerS :: MonadUnliftIO m => WorkerStates s -> (SchedulerS s m a -> m b) -> m [a]
@@ -101,8 +104,7 @@ withSchedulerS states action =
       | wasLocked = pure ()
       | otherwise = writeIORef mutex False
     runSchedulerS isLocked
-      | isLocked =
-        error "withSchedulerS: WorkerStates cannot be used at the same time by different schedulers"
+      | isLocked = liftIO $ throwIO MutexException
       | otherwise =
         withScheduler (_workerStatesComp states) $ \scheduler ->
           action (SchedulerS states scheduler)
