@@ -4,7 +4,7 @@ module Control.SchedulerSpec
   ( spec
   ) where
 
-import Control.Concurrent (killThread, myThreadId, threadDelay)
+import Control.Concurrent (killThread, myThreadId, threadDelay, yield)
 import Control.Concurrent.MVar
 import Control.DeepSeq
 import qualified Control.Exception as EUnsafe
@@ -202,7 +202,9 @@ prop_FinishEarly_ comp =
   comp /= Seq ==> concurrentProperty $ do
     ref <- newIORef True
     withScheduler_ comp $ \scheduler ->
-      scheduleWork_ scheduler (terminate_ scheduler >> threadDelay 10000 >> writeIORef ref False)
+      scheduleWork_
+        scheduler
+        (terminate_ scheduler >> yield >> threadDelay 10000 >> writeIORef ref False)
     property <$> readIORef ref
 
 prop_FinishEarly :: Comp -> Property

@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE PatternSynonyms #-}
@@ -13,9 +14,9 @@
 -- Portability : non-portable
 --
 module Control.Scheduler
-  (
-    -- * Scheduler
+  ( -- * Scheduler
     Scheduler
+  , WorkerId(..)
   , numWorkers
   , scheduleWork
   , scheduleWork_
@@ -24,10 +25,20 @@ module Control.Scheduler
   , terminate
   , terminate_
   , terminateWith
+  -- ** Stateful Workers
+  , WorkerStates
+  , initWorkerStates
+  , SchedulerS
+  , withoutStates
+  , scheduleWorkState
+  , scheduleWorkState_
   -- * Initialize Scheduler
   , withScheduler
   , withScheduler_
   , trivialScheduler_
+  -- ** Stateful
+  , withSchedulerS
+  , withSchedulerS_
   -- * Computation strategies
   , Comp(..)
   , getCompWorkers
@@ -51,6 +62,7 @@ import Data.Atomics (atomicModifyIORefCAS, atomicModifyIORefCAS_)
 import qualified Data.Foldable as F (foldl', traverse_)
 import Data.IORef
 import Data.Maybe (catMaybes)
+import Data.Primitive.Array
 import Data.Traversable
 
 
@@ -70,6 +82,101 @@ data Scheduler m a = Scheduler
   , _terminate      :: a -> m a
   , _terminateWith  :: a -> m a
   }
+
+-- | This is a wrapper around `Scheduler`, that keeps a separate state for each
+-- individual worker. A good example of this would be using a separate random number
+-- generator for each worker since most of the time generators are not thread safe.
+--
+-- @since 1.4.0
+data SchedulerS s m a = SchedulerS
+  { _workerStates :: !(WorkerStates s)
+  , _getScheduler :: !(Scheduler m a)
+  }
+
+-- | Get the scheduler that can't access worker states.
+--
+-- @since 1.4.0
+withoutStates :: SchedulerS s m a -> Scheduler m a
+withoutStates = _getScheduler
+
+-- | A unique id for the worker in the `Scheduler` context. It will always be a number
+-- from @0@ up to, but not including, the number of workers a scheduler has, which can
+-- always be determined by `numWorkers`.
+--
+-- @since 1.4.0
+newtype WorkerId = WorkerId
+  { getWorkerId :: Int
+  } deriving (Show, Eq, Ord, Enum)
+
+
+-- | Each worker is capable of keeping it's own state, that can be share for different
+-- schedulers, but not at the same time. In other words using same `WorkerStates` on
+-- `withSchedulerS` concurrently will result in an error. Can be initialized with
+-- `initWorkerStates`
+--
+-- @since 1.4.0
+data WorkerStates s = WorkerStates
+  { _workerStatesComp  :: !Comp
+  , _workerStatesArray :: !(Array s)
+  , _workerStatesMutex :: !(IORef Bool)
+  }
+
+-- | Initilize a separate state for each worker.
+--
+-- @since 1.4.0
+initWorkerStates :: MonadIO m => Comp -> (WorkerId -> m s) -> m (WorkerStates s)
+initWorkerStates comp initState = do
+  nWorkers <- getCompWorkers comp
+  workerStates <- mapM (initState . WorkerId) [0 .. nWorkers - 1]
+  mutex <- liftIO $ newIORef False
+  pure
+    WorkerStates
+      { _workerStatesComp = comp
+      , _workerStatesArray = fromListN nWorkers workerStates
+      , _workerStatesMutex = mutex
+      }
+
+-- | Run a scheduler with stateful workers
+--
+-- @since 1.4.0
+withSchedulerS :: MonadUnliftIO m => WorkerStates s -> (SchedulerS s m a -> m b) -> m [a]
+withSchedulerS states action =
+  withRunInIO $ \run -> bracket lockState unlockState (run . runSchedulerS)
+  where
+    mutex = _workerStatesMutex states
+    lockState = atomicModifyIORef' mutex ((,) True)
+    unlockState wasLocked
+      | wasLocked = pure ()
+      | otherwise = writeIORef mutex False
+    runSchedulerS isLocked
+      | isLocked =
+        error "withSchedulerS: WorkerStates cannot be used at the same time by different schedulers"
+      | otherwise =
+        withScheduler (_workerStatesComp states) $ \scheduler ->
+          action (SchedulerS states scheduler)
+
+-- | Run a scheduler with stateful workers, while discarding computation results.
+--
+-- @since 1.4.0
+withSchedulerS_ :: MonadUnliftIO m => WorkerStates s -> (SchedulerS s m () -> m b) -> m ()
+withSchedulerS_ states = void . withSchedulerS states
+
+
+-- | Schedule a job that will get a worker state passed as an argument
+--
+-- @since 1.4.0
+scheduleWorkState :: SchedulerS s m a -> (s -> m a) -> m ()
+scheduleWorkState schedulerS withState =
+  scheduleWorkId (_getScheduler schedulerS) $ \i ->
+    withState (indexArray (_workerStatesArray (_workerStates schedulerS)) i)
+
+-- | Same as `scheduleWorkState`, but dont' keep the result of computation.
+--
+-- @since 1.4.0
+scheduleWorkState_ :: SchedulerS s m () -> (s -> m ()) -> m ()
+scheduleWorkState_ schedulerS withState =
+  scheduleWorkId_ (_getScheduler schedulerS) $ \i ->
+    withState (indexArray (_workerStatesArray (_workerStates schedulerS)) i)
 
 
 -- | Get the number of workers. Will mainly depend on the computation strategy and/or number of
@@ -346,18 +453,18 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
   when (jc == 0) $ scheduleJobs_ jobs (\_ -> pure ())
   let spawnWorkersWith fork ws =
         withRunInIO $ \run ->
-          forM ws $ \w ->
-            fork w $ \unmask ->
+          forM (zip [0 ..] ws) $ \(wId, on) ->
+            fork on $ \unmask ->
               catch
-                (unmask $ run $ runWorker w jobsQueue onRetire)
+                (unmask $ run $ runWorker wId jobsQueue onRetire)
                 (run . handleWorkerException jobsQueue workDoneMVar jobsNumWorkers)
       spawnWorkers =
         case comp of
           Seq -> return []
             -- \ no need to fork threads for a sequential computation
-          Par -> spawnWorkersWith forkOnWithUnmask [0 .. jobsNumWorkers - 1]
+          Par -> spawnWorkersWith forkOnWithUnmask [1 .. jobsNumWorkers]
           ParOn ws -> spawnWorkersWith forkOnWithUnmask ws
-          ParN _ -> spawnWorkersWith (\_ -> forkIOWithUnmask) [0 .. jobsNumWorkers - 1]
+          ParN _ -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 .. jobsNumWorkers]
       terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
       doWork tids = do
         when (comp == Seq) $ runWorker 0 jobsQueue onRetire
