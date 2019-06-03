@@ -40,7 +40,7 @@ data Queue m a = Queue
 
 -- | A unique id for the worker in the `Control.Scheduler.Scheduler` context. It will
 -- always be a number from @0@ up to, but not including, the number of workers a scheduler
--- has, which can always be determined by `Control.Scheduler.numWorkers`.
+-- has, which in turn can always be determined with `Control.Scheduler.numWorkers` function.
 --
 -- @since 1.4.0
 newtype WorkerId = WorkerId

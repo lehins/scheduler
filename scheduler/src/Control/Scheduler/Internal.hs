@@ -43,9 +43,9 @@ data Scheduler m a = Scheduler
   , _terminateWith  :: a -> m a
   }
 
--- | This is a wrapper around `Scheduler`, that keeps a separate state for each
--- individual worker. A good example of this would be using a separate random number
--- generator for each worker since most of the time generators are not thread safe.
+-- | This is a wrapper around `Scheduler`, but it also keeps a separate state for each
+-- individual worker. See `Control.Scheduler.withSchedulerS` or
+-- `Control.Scheduler.withSchedulerS_` for ways to construct and use this data type.
 --
 -- @since 1.4.0
 data SchedulerS s m a = SchedulerS
@@ -54,8 +54,8 @@ data SchedulerS s m a = SchedulerS
   }
 
 -- | Each worker is capable of keeping it's own state, that can be share for different
--- schedulers, but not at the same time. In other words using same `WorkerStates` on
--- `withSchedulerS` concurrently will result in an error. Can be initialized with
+-- schedulers, but not at the same time. In other words using the same `WorkerStates` on
+-- `Control.Scheduler.withSchedulerS` concurrently will result in an error. Can be initialized with
 -- `Control.Scheduler.initWorkerStates`
 --
 -- @since 1.4.0
@@ -89,7 +89,9 @@ data WorkerTerminateException =
 
 instance Exception WorkerTerminateException
 
-
+-- | Exception that gets thrown whenever concurrent access is attempted to the `WorkerStates`
+--
+-- @since 1.4.0
 data MutexException =
   MutexException
   deriving (Eq, Show)

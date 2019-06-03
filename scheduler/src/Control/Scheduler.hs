@@ -16,30 +16,29 @@
 module Control.Scheduler
   ( -- * Scheduler
     Scheduler
-  , WorkerId(..)
-  , numWorkers
+  , SchedulerS
+  , trivialScheduler_
+  , withScheduler
+  , withScheduler_
+  , withSchedulerS
+  , withSchedulerS_
+  , unwrapSchedulerS
+  -- * Scheduling computation
   , scheduleWork
   , scheduleWork_
   , scheduleWorkId
   , scheduleWorkId_
+  , scheduleWorkState
+  , scheduleWorkState_
   , terminate
   , terminate_
   , terminateWith
-  -- ** Stateful Workers
+  -- * Workers
+  , WorkerId(..)
   , WorkerStates
+  , numWorkers
   , workerStatesComp
   , initWorkerStates
-  , SchedulerS
-  , withoutStates
-  , scheduleWorkState
-  , scheduleWorkState_
-  -- * Initialize Scheduler
-  , withScheduler
-  , withScheduler_
-  , trivialScheduler_
-  -- ** Stateful
-  , withSchedulerS
-  , withSchedulerS_
   -- * Computation strategies
   , Comp(..)
   , getCompWorkers
@@ -71,11 +70,11 @@ import Data.Traversable
 import Control.Monad.ST
 #endif
 
--- | Get the scheduler that can't access worker states.
+-- | Get the underlying `Scheduler`, which cannot access `WorkerStates`.
 --
 -- @since 1.4.0
-withoutStates :: SchedulerS s m a -> Scheduler m a
-withoutStates = _getScheduler
+unwrapSchedulerS :: SchedulerS s m a -> Scheduler m a
+unwrapSchedulerS = _getScheduler
 
 
 -- | Initialize a separate state for each worker.
@@ -122,22 +121,40 @@ workerStatesComp :: WorkerStates s -> Comp
 workerStatesComp = _workerStatesComp
 
 -- | Run a scheduler with stateful workers. Throws `MutexException` if an attempt is made
--- to concurrently use the same `WorkerState` with another `SchedulerS`.
+-- to concurrently use the same `WorkerStates` with another `SchedulerS`.
 --
 -- ==== __Examples__
 --
+-- A good example of using stateful workers would be generation of random number in
+-- parallel. A lof of times random number generators are not gonna be thread safe, so we
+-- can work around this problem, by using a separate stateful generator for each of the
+-- workers.
+--
+-- >>> import Control.Monad as M ((>=>), replicateM)
+-- >>> import Control.Concurrent (yield, threadDelay)
+-- >>> import Data.List (sort)
+-- >>> -- ^ Above imports are used to make sure output is deterministic, which is needed for doctest
 -- >>> import System.Random.MWC as MWC
 -- >>> import Data.Vector.Unboxed as V (singleton)
 -- >>> states <- initWorkerStates (ParN 4) (MWC.initialize . V.singleton . fromIntegral . getWorkerId)
--- >>> withSchedulerS states (\ scheduler -> replicateM 4 (scheduleWorkState scheduler MWC.uniform)) :: IO [Double]
--- [0.5000843862105709,0.7408640677124702,0.15936354678388287,0.6952687664728953]
--- >>> withSchedulerS states (\ scheduler -> replicateM 4 (scheduleWorkState scheduler MWC.uniform)) :: IO [Double]
--- [0.22704658562858937,0.44984153252922365,0.5229394540634854,0.12154151161735471]
+-- >>> let scheduleGen scheduler = scheduleWorkState scheduler (MWC.uniform >=> \r -> yield >> threadDelay 200000 >> pure r)
+-- >>> sort <$> withSchedulerS states (M.replicateM 4 . scheduleGen) :: IO [Double]
+-- [0.21734983682025255,0.5000843862105709,0.5759825622603018,0.8587171114177893]
+-- >>> sort <$> withSchedulerS states (M.replicateM 4 . scheduleGen) :: IO [Double]
+-- [2.3598617298033475e-2,9.949679290089553e-2,0.38223134248645885,0.7408640677124702]
 --
 -- In the above example we use four different random number generators from
 -- [`mwc-random`](https://www.stackage.org/package/mwc-random) in order to generate 4
 -- numbers, all in separate threads. The subsequent call to the `withSchedulerS` function
--- with the same @states@ is allowed to reuse the same generators.
+-- with the same @states@ is allowed to reuse the same generators, thus avoiding expensive
+-- initialization.
+--
+-- /Side note/ - The example presented was crafted with slight trickery in order to
+-- guarantee that the output is deterministic, so if you run instructions exactly the same
+-- way in GHCI you will get the exact same output. Non-determinism comes from thread
+-- scheduling, rather than from random number generator, because we use exactly the same
+-- seed for each worker, but workers run concurrently. Exact output is not really needed,
+-- except for the doctests to pass.
 --
 -- @since 1.4.0
 withSchedulerS :: MonadUnliftIO m => WorkerStates s -> (SchedulerS s m a -> m b) -> m [a]

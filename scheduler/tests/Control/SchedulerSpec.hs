@@ -296,7 +296,7 @@ prop_ReturnsState comp = concurrentProperty $ do
   n <- getCompWorkers comp
   state <- initWorkerStates comp (pure . getWorkerId)
   ids <- withSchedulerS state $ \ schedulerS ->
-    replicateM (numWorkers (withoutStates schedulerS)) $
+    replicateM (numWorkers (unwrapSchedulerS schedulerS)) $
       scheduleWorkState schedulerS $ \ s -> threadDelay 10000 >> yield >> pure s
   pure (sort ids === [0..n-1])
 

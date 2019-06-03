@@ -84,11 +84,11 @@ joinComp x y =
   case x of
     Seq -> y
     Par -> Par
-    ParN 0 -> ParN 0
+    Par' -> Par'
     ParOn xs ->
       case y of
         Par      -> Par
-        ParN 0   -> ParN 0
+        Par'     -> Par'
         ParOn ys -> ParOn (xs <> ys)
         _        -> x
     ParN n1 ->
@@ -96,7 +96,7 @@ joinComp x y =
         Seq     -> x
         Par     -> Par
         ParOn _ -> y
-        ParN 0  -> y
+        Par'    -> y
         ParN n2 -> ParN (max n1 n2)
 {-# NOINLINE joinComp #-}
 
@@ -110,7 +110,7 @@ numCapsRef = unsafePerformIO $ do
 --
 -- /Note/ - If at any point during program execution global number of capabilities gets
 -- changed with `Control.Concurrent.setNumCapabilities`, it will have no affect on this
--- function, unless it hasn't yet been called with `Par` or `ParN` 0 arguments.
+-- function, unless it hasn't yet been called with `Par` or `Par'` arguments.
 --
 -- @since 1.1.0
 getCompWorkers :: MonadIO m => Comp -> m Int
@@ -119,5 +119,5 @@ getCompWorkers =
     Seq -> return 1
     Par -> liftIO (readIORef numCapsRef)
     ParOn ws -> return $ length ws
-    ParN 0 -> liftIO (readIORef numCapsRef)
+    Par' -> liftIO (readIORef numCapsRef)
     ParN n -> return $ fromIntegral n
