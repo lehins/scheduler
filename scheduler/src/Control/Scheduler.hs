@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE PatternSynonyms #-}
@@ -26,6 +27,7 @@ module Control.Scheduler
   , terminateWith
   -- ** Stateful Workers
   , WorkerStates
+  , workerStatesComp
   , initWorkerStates
   , SchedulerS
   , withoutStates
@@ -65,7 +67,9 @@ import Data.IORef
 import Data.Maybe (catMaybes)
 import Data.Primitive.Array
 import Data.Traversable
-
+#if !MIN_VERSION_primitive(0,6,2)
+import Control.Monad.ST
+#endif
 
 -- | Get the scheduler that can't access worker states.
 --
@@ -85,13 +89,55 @@ initWorkerStates comp initState = do
   pure
     WorkerStates
       { _workerStatesComp = comp
-      , _workerStatesArray = fromListN nWorkers workerStates
+      , _workerStatesArray = arrayFromListN nWorkers workerStates
       , _workerStatesMutex = mutex
       }
+
+arrayFromListN :: Int -> [a] -> Array a
+#if MIN_VERSION_primitive(0,6,2)
+arrayFromListN = fromListN
+#else
+-- Modified copy from primitive-0.7.0.0
+arrayFromListN n l =
+  runST $ do
+    ma <- newArray n (error "initWorkerStates: uninitialized element")
+    let go !ix [] =
+          if ix == n
+            then return ()
+            else error "initWorkerStates: list length less than specified size"
+        go !ix (x:xs) =
+          if ix < n
+            then do
+              writeArray ma ix x
+              go (ix + 1) xs
+            else error "initWorkerStates: list length greater than specified size"
+    go 0 l
+    unsafeFreezeArray ma
+#endif
+
+-- | Get the computation strategy the states where initialized with.
+--
+-- @since 1.4.0
+workerStatesComp :: WorkerStates s -> Comp
+workerStatesComp = _workerStatesComp
 
 -- | Run a scheduler with stateful workers. Throws `MutexException` if an attempt is made
 -- to concurrently use the same `WorkerState` with another `SchedulerS`.
 --
+-- ==== __Examples__
+--
+-- >>> import System.Random.MWC as MWC
+-- >>> import Data.Vector.Unboxed as V (singleton)
+-- >>> states <- initWorkerStates (ParN 4) (MWC.initialize . V.singleton . fromIntegral . getWorkerId)
+-- >>> withSchedulerS states (\ scheduler -> replicateM 4 (scheduleWorkState scheduler MWC.uniform)) :: IO [Double]
+-- [0.5000843862105709,0.7408640677124702,0.15936354678388287,0.6952687664728953]
+-- >>> withSchedulerS states (\ scheduler -> replicateM 4 (scheduleWorkState scheduler MWC.uniform)) :: IO [Double]
+-- [0.22704658562858937,0.44984153252922365,0.5229394540634854,0.12154151161735471]
+--
+-- In the above example we use four different random number generators from
+-- [`mwc-random`](https://www.stackage.org/package/mwc-random) in order to generate 4
+-- numbers, all in separate threads. The subsequent call to the `withSchedulerS` function
+-- with the same @states@ is allowed to reuse the same generators.
 --
 -- @since 1.4.0
 withSchedulerS :: MonadUnliftIO m => WorkerStates s -> (SchedulerS s m a -> m b) -> m [a]
