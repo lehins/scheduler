@@ -1,3 +1,4 @@
+{-# OPTIONS_HADDOCK hide, not-home #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PatternSynonyms #-}

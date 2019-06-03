@@ -1,4 +1,6 @@
+{-# OPTIONS_HADDOCK hide, not-home #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 -- |
 -- Module      : Control.Scheduler.Queue
 -- Copyright   : (c) Alexey Kuleshevich 2018-2019
@@ -12,11 +14,11 @@ module Control.Scheduler.Queue
     Job(Retire, Job_)
   , mkJob
   , JQueue
+  , WorkerId(..)
   , newJQueue
   , pushJQueue
   , popJQueue
   , readResults
-  -- * Tools
   ) where
 
 import Control.Concurrent.MVar
@@ -25,12 +27,25 @@ import Control.Monad.IO.Unlift
 import Data.Atomics (atomicModifyIORefCAS)
 import Data.IORef
 
+
+-- | A blocking unbounded queue that keeps the jobs in FIFO order and the results IORefs
+-- in reversed
 data Queue m a = Queue
   { qQueue   :: ![Job m a]
   , qStack   :: ![Job m a]
   , qResults :: ![IORef (Maybe a)]
   , qBaton   :: !(MVar ())
   }
+
+
+-- | A unique id for the worker in the `Control.Scheduler.Scheduler` context. It will
+-- always be a number from @0@ up to, but not including, the number of workers a scheduler
+-- has, which can always be determined by `Control.Scheduler.numWorkers`.
+--
+-- @since 1.4.0
+newtype WorkerId = WorkerId
+  { getWorkerId :: Int
+  } deriving (Show, Eq, Ord, Enum, Num)
 
 
 popQueue :: Queue m a -> Maybe (Job m a, Queue m a)
@@ -43,12 +58,12 @@ popQueue queue =
         y:ys -> Just (y, queue {qQueue = ys, qStack = []})
 
 data Job m a
-  = Job !(IORef (Maybe a)) (Int -> m a)
-  | Job_ (Int -> m ())
+  = Job !(IORef (Maybe a)) (WorkerId -> m a)
+  | Job_ (WorkerId -> m ())
   | Retire
 
 
-mkJob :: MonadIO m => (Int -> m a) -> m (Job m a)
+mkJob :: MonadIO m => (WorkerId -> m a) -> m (Job m a)
 mkJob action = do
   resRef <- liftIO $ newIORef Nothing
   return $!
@@ -85,7 +100,7 @@ pushJQueue (JQueue jQueueRef) job =
            , liftIO $ putMVar qBaton ()))
 
 
-popJQueue :: MonadIO m => JQueue m a -> m (Maybe (Int -> m ()))
+popJQueue :: MonadIO m => JQueue m a -> m (Maybe (WorkerId -> m ()))
 popJQueue (JQueue jQueueRef) = liftIO inner
   where
     inner =

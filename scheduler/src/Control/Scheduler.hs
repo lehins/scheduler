@@ -1,5 +1,4 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE PatternSynonyms #-}
@@ -57,6 +56,7 @@ import Control.Exception
 import Control.Monad
 import Control.Monad.IO.Unlift
 import Control.Scheduler.Computation
+import Control.Scheduler.Internal
 import Control.Scheduler.Queue
 import Data.Atomics (atomicModifyIORefCAS, atomicModifyIORefCAS_)
 import qualified Data.Foldable as F (foldl', traverse_)
@@ -66,60 +66,12 @@ import Data.Primitive.Array
 import Data.Traversable
 
 
-data Jobs m a = Jobs
-  { jobsNumWorkers :: {-# UNPACK #-} !Int
-  , jobsQueue      :: !(JQueue m a)
-  , jobsCountRef   :: !(IORef Int)
-  }
-
--- | Main type for scheduling work. See `withScheduler` or `withScheduler_` for ways to construct
--- and use this data type.
---
--- @since 1.0.0
-data Scheduler m a = Scheduler
-  { _numWorkers     :: {-# UNPACK #-} !Int
-  , _scheduleWorkId :: (Int -> m a) -> m ()
-  , _terminate      :: a -> m a
-  , _terminateWith  :: a -> m a
-  }
-
--- | This is a wrapper around `Scheduler`, that keeps a separate state for each
--- individual worker. A good example of this would be using a separate random number
--- generator for each worker since most of the time generators are not thread safe.
---
--- @since 1.4.0
-data SchedulerS s m a = SchedulerS
-  { _workerStates :: !(WorkerStates s)
-  , _getScheduler :: !(Scheduler m a)
-  }
-
 -- | Get the scheduler that can't access worker states.
 --
 -- @since 1.4.0
 withoutStates :: SchedulerS s m a -> Scheduler m a
 withoutStates = _getScheduler
 
--- | A unique id for the worker in the `Scheduler` context. It will always be a number
--- from @0@ up to, but not including, the number of workers a scheduler has, which can
--- always be determined by `numWorkers`.
---
--- @since 1.4.0
-newtype WorkerId = WorkerId
-  { getWorkerId :: Int
-  } deriving (Show, Eq, Ord, Enum)
-
-
--- | Each worker is capable of keeping it's own state, that can be share for different
--- schedulers, but not at the same time. In other words using same `WorkerStates` on
--- `withSchedulerS` concurrently will result in an error. Can be initialized with
--- `initWorkerStates`
---
--- @since 1.4.0
-data WorkerStates s = WorkerStates
-  { _workerStatesComp  :: !Comp
-  , _workerStatesArray :: !(Array s)
-  , _workerStatesMutex :: !(IORef Bool)
-  }
 
 -- | Initilize a separate state for each worker.
 --
@@ -167,7 +119,7 @@ withSchedulerS_ states = void . withSchedulerS states
 -- @since 1.4.0
 scheduleWorkState :: SchedulerS s m a -> (s -> m a) -> m ()
 scheduleWorkState schedulerS withState =
-  scheduleWorkId (_getScheduler schedulerS) $ \i ->
+  scheduleWorkId (_getScheduler schedulerS) $ \(WorkerId i) ->
     withState (indexArray (_workerStatesArray (_workerStates schedulerS)) i)
 
 -- | Same as `scheduleWorkState`, but dont' keep the result of computation.
@@ -175,7 +127,7 @@ scheduleWorkState schedulerS withState =
 -- @since 1.4.0
 scheduleWorkState_ :: SchedulerS s m () -> (s -> m ()) -> m ()
 scheduleWorkState_ schedulerS withState =
-  scheduleWorkId_ (_getScheduler schedulerS) $ \i ->
+  scheduleWorkId_ (_getScheduler schedulerS) $ \(WorkerId i) ->
     withState (indexArray (_workerStatesArray (_workerStates schedulerS)) i)
 
 
@@ -191,7 +143,7 @@ numWorkers = _numWorkers
 -- jobs. Argument supplied to the job will be the id of the worker doing the job.
 --
 -- @since 1.2.0
-scheduleWorkId :: Scheduler m a -> (Int -> m a) -> m ()
+scheduleWorkId :: Scheduler m a -> (WorkerId -> m a) -> m ()
 scheduleWorkId =_scheduleWorkId
 
 -- | As soon as possible try to terminate any computation that is being performed by all workers
@@ -233,7 +185,7 @@ scheduleWork_ = scheduleWork
 -- | Same as `scheduleWorkId`, but only for a `Scheduler` that doesn't keep the results.
 --
 -- @since 1.2.0
-scheduleWorkId_ :: Scheduler m () -> (Int -> m ()) -> m ()
+scheduleWorkId_ :: Scheduler m () -> (WorkerId -> m ()) -> m ()
 scheduleWorkId_ = _scheduleWorkId
 
 -- | Similar to `terminate`, but for a `Scheduler` that does not keep any results of computation.
@@ -251,16 +203,10 @@ terminate_ = (`_terminateWith` ())
 trivialScheduler_ :: Applicative f => Scheduler f ()
 trivialScheduler_ = Scheduler
   { _numWorkers = 1
-  , _scheduleWorkId = \f -> f 0
+  , _scheduleWorkId = \f -> f (WorkerId 0)
   , _terminate = const $ pure ()
   , _terminateWith = const $ pure ()
   }
-
-
-data SchedulerOutcome a
-  = SchedulerFinished
-  | SchedulerTerminatedEarly ![a]
-  | SchedulerWorkerException WorkerException
 
 
 
@@ -310,16 +256,17 @@ replicateConcurrently_ comp n f =
   withScheduler_ comp $ \s -> scheduleWork s $ replicateM_ n (scheduleWork s $ void f)
 
 
-scheduleJobs :: MonadIO m => Jobs m a -> (Int -> m a) -> m ()
+scheduleJobs :: MonadIO m => Jobs m a -> (WorkerId -> m a) -> m ()
 scheduleJobs = scheduleJobsWith mkJob
 
 -- | Similarly to `scheduleWork`, but ignores the result of computation, thus having less overhead.
 --
 -- @since 1.0.0
-scheduleJobs_ :: MonadIO m => Jobs m a -> (Int -> m b) -> m ()
+scheduleJobs_ :: MonadIO m => Jobs m a -> (WorkerId -> m b) -> m ()
 scheduleJobs_ = scheduleJobsWith (\job -> pure (Job_ (void . job)))
 
-scheduleJobsWith :: MonadIO m => ((Int -> m b) -> m (Job m a)) -> Jobs m a -> (Int -> m b) -> m ()
+scheduleJobsWith ::
+     MonadIO m => ((WorkerId -> m b) -> m (Job m a)) -> Jobs m a -> (WorkerId -> m b) -> m ()
 scheduleJobsWith mkJob' jobs action = do
   liftIO $ atomicModifyIORefCAS_ (jobsCountRef jobs) (+ 1)
   job <-
@@ -351,7 +298,7 @@ dropCounterOnZero counterRef onZero = do
 -- | Runs the worker until the job queue is exhausted, at which point it will execute the final task
 -- of retirement and return
 runWorker :: MonadIO m =>
-             Int
+             WorkerId
           -> JQueue m a
           -> m () -- ^ Action to run upon retirement
           -> m ()
@@ -414,7 +361,7 @@ withScheduler_ comp = void . withSchedulerInternal comp scheduleJobs_ (const (pu
 withSchedulerInternal ::
      MonadUnliftIO m
   => Comp -- ^ Computation strategy
-  -> (Jobs m a -> (Int -> m a) -> m ()) -- ^ How to schedule work
+  -> (Jobs m a -> (WorkerId -> m a) -> m ()) -- ^ How to schedule work
   -> (JQueue m a -> m [Maybe a]) -- ^ How to collect results
   -> ([a] -> [a]) -- ^ Adjust results in some way
   -> (Scheduler m a -> m b)
@@ -495,23 +442,6 @@ handleWorkerException jQueue workDoneMVar nWorkers exc =
       -- / Do the co-worker cleanup
       retireWorkersN jQueue (nWorkers - 1)
 
-
--- | This exception should normally be never seen in the wild and is for internal use only.
-newtype WorkerException =
-  WorkerException SomeException
-  -- ^ One of workers experienced an exception, main thread will receive the same `SomeException`.
-  deriving (Show)
-
-instance Exception WorkerException
-
-data WorkerTerminateException =
-  WorkerTerminateException
-  -- ^ When a brother worker dies of some exception, all the other ones will be terminated
-  -- asynchronously with this one.
-  deriving (Show)
-
-
-instance Exception WorkerTerminateException
 
 -- Copy from unliftio:
 safeBracketOnError :: MonadUnliftIO m => m a -> (a -> m b) -> (a -> m c) -> m c
