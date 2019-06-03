@@ -72,7 +72,7 @@ data Scheduler m a = Scheduler
   }
 
 
--- ^ Get the number of workers. Will mainly depend on the computation strategy and/or number of
+-- | Get the number of workers. Will mainly depend on the computation strategy and/or number of
 -- capabilities you have. Related function is `getCompWorkers`.
 --
 -- @since 1.0.0
