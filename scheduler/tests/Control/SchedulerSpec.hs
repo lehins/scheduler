@@ -4,7 +4,7 @@ module Control.SchedulerSpec
   ( spec
   ) where
 
-import Control.Concurrent (killThread, myThreadId, threadDelay)
+import Control.Concurrent (killThread, myThreadId, threadDelay, yield)
 import Control.Concurrent.MVar
 import Control.DeepSeq
 import qualified Control.Exception as EUnsafe
@@ -202,7 +202,9 @@ prop_FinishEarly_ comp =
   comp /= Seq ==> concurrentProperty $ do
     ref <- newIORef True
     withScheduler_ comp $ \scheduler ->
-      scheduleWork_ scheduler (terminate_ scheduler >> threadDelay 10000 >> writeIORef ref False)
+      scheduleWork_
+        scheduler
+        (terminate_ scheduler >> yield >> threadDelay 10000 >> writeIORef ref False)
     property <$> readIORef ref
 
 prop_FinishEarly :: Comp -> Property
@@ -274,6 +276,7 @@ prop_TraverseConcurrently_ comp xs x =
     eRes' <- try $ traverseConcurrently_ comp f xs
     return (eRes === eRes')
 
+-- TODO: fix the infinite property for single worker schedulers
 -- | Check if an element is in the list with an exception, where we know that list is infinite and
 -- element is part of that list.
 prop_TraverseConcurrentlyInfinite_ :: Comp -> [Int] -> Int -> Property
@@ -286,6 +289,25 @@ prop_TraverseConcurrentlyInfinite_ comp xs x =
     eRes :: Either Elem () <- try $ F.traverse_ f xs'
     eRes' <- try $ traverseConcurrently_ comp f xs'
     return (eRes === eRes')
+
+
+prop_ReturnsState :: Comp -> Property
+prop_ReturnsState comp = concurrentProperty $ do
+  n <- getCompWorkers comp
+  state <- initWorkerStates comp (pure . getWorkerId)
+  ids <- withSchedulerWS state $ \ schedulerWS ->
+    replicateM (numWorkers (unwrapSchedulerWS schedulerWS)) $
+      scheduleWorkState schedulerWS $ \ s -> threadDelay 10000 >> yield >> pure s
+  pure (sort ids === [0..n-1])
+
+prop_MutexException :: Comp -> Property
+prop_MutexException comp =
+  assertExceptionIO (== MutexException) $ do
+    state <- initWorkerStates comp (pure . getWorkerId)
+    withSchedulerWS_ state $ \schedulerWS ->
+      scheduleWorkState_ schedulerWS $ \_s -> withSchedulerWS_ state $ \_s' -> pure ()
+
+
 
 spec :: Spec
 spec = do
@@ -334,6 +356,9 @@ spec = do
     it "FinishEarlyWith" $ timed prop_FinishEarlyWith
     it "FinishBeforeStarting" $ timed prop_FinishBeforeStarting
     it "FinishWithBeforeStarting" $ timed prop_FinishWithBeforeStarting
+  describe "WorkerState" $ do
+    it "ReturnsState" $ timed prop_ReturnsState
+    it "MutexException" $ timed prop_MutexException
 
 timed :: Testable prop => prop -> Property
 timed = within 2000000

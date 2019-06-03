@@ -1,3 +1,18 @@
+# 1.4.0
+
+* Worker id has been promoted from `Int` to a `newtype` wrapper `WorkerId`.
+* Addition of `SchedulerWS` and `WorkerStates` data types. As well as the
+  related `MutexException`
+* Functions that came along with stateful worker threads:
+  * `initWorkerStates`
+  * `workerStatesComp`
+  * `scheduleWorkState`
+  * `scheduleWorkState_`
+  * `withSchedulerWS`
+  * `withSchedulerWS_`
+  * `unwrapSchedulerWS`
+* Made internal modules accessible, but invisible.
+
 # 1.3.0
 
 * Make sure internal `Scheduler` accessor functions are no longer exported, they only

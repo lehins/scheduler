@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE PatternSynonyms #-}
@@ -13,21 +14,31 @@
 -- Portability : non-portable
 --
 module Control.Scheduler
-  (
-    -- * Scheduler
+  ( -- * Scheduler
     Scheduler
-  , numWorkers
+  , SchedulerWS
+  , trivialScheduler_
+  , withScheduler
+  , withScheduler_
+  , withSchedulerWS
+  , withSchedulerWS_
+  , unwrapSchedulerWS
+  -- * Scheduling computation
   , scheduleWork
   , scheduleWork_
   , scheduleWorkId
   , scheduleWorkId_
+  , scheduleWorkState
+  , scheduleWorkState_
   , terminate
   , terminate_
   , terminateWith
-  -- * Initialize Scheduler
-  , withScheduler
-  , withScheduler_
-  , trivialScheduler_
+  -- * Workers
+  , WorkerId(..)
+  , WorkerStates
+  , numWorkers
+  , workerStatesComp
+  , initWorkerStates
   -- * Computation strategies
   , Comp(..)
   , getCompWorkers
@@ -39,6 +50,7 @@ module Control.Scheduler
   , traverse_
   -- * Exceptions
   -- $exceptions
+  , MutexException(..)
   ) where
 
 import Control.Concurrent
@@ -46,30 +58,142 @@ import Control.Exception
 import Control.Monad
 import Control.Monad.IO.Unlift
 import Control.Scheduler.Computation
+import Control.Scheduler.Internal
 import Control.Scheduler.Queue
 import Data.Atomics (atomicModifyIORefCAS, atomicModifyIORefCAS_)
 import qualified Data.Foldable as F (foldl', traverse_)
 import Data.IORef
 import Data.Maybe (catMaybes)
+import Data.Primitive.Array
 import Data.Traversable
+#if !MIN_VERSION_primitive(0,6,2)
+import Control.Monad.ST
+#endif
 
-
-data Jobs m a = Jobs
-  { jobsNumWorkers :: {-# UNPACK #-} !Int
-  , jobsQueue      :: !(JQueue m a)
-  , jobsCountRef   :: !(IORef Int)
-  }
-
--- | Main type for scheduling work. See `withScheduler` or `withScheduler_` for ways to construct
--- and use this data type.
+-- | Get the underlying `Scheduler`, which cannot access `WorkerStates`.
 --
--- @since 1.0.0
-data Scheduler m a = Scheduler
-  { _numWorkers     :: {-# UNPACK #-} !Int
-  , _scheduleWorkId :: (Int -> m a) -> m ()
-  , _terminate      :: a -> m a
-  , _terminateWith  :: a -> m a
-  }
+-- @since 1.4.0
+unwrapSchedulerWS :: SchedulerWS s m a -> Scheduler m a
+unwrapSchedulerWS = _getScheduler
+
+
+-- | Initialize a separate state for each worker.
+--
+-- @since 1.4.0
+initWorkerStates :: MonadIO m => Comp -> (WorkerId -> m s) -> m (WorkerStates s)
+initWorkerStates comp initState = do
+  nWorkers <- getCompWorkers comp
+  workerStates <- mapM (initState . WorkerId) [0 .. nWorkers - 1]
+  mutex <- liftIO $ newIORef False
+  pure
+    WorkerStates
+      { _workerStatesComp = comp
+      , _workerStatesArray = arrayFromListN nWorkers workerStates
+      , _workerStatesMutex = mutex
+      }
+
+arrayFromListN :: Int -> [a] -> Array a
+#if MIN_VERSION_primitive(0,6,2)
+arrayFromListN = fromListN
+#else
+-- Modified copy from primitive-0.7.0.0
+arrayFromListN n l =
+  runST $ do
+    ma <- newArray n (error "initWorkerStates: uninitialized element")
+    let go !ix [] =
+          if ix == n
+            then return ()
+            else error "initWorkerStates: list length less than specified size"
+        go !ix (x:xs) =
+          if ix < n
+            then do
+              writeArray ma ix x
+              go (ix + 1) xs
+            else error "initWorkerStates: list length greater than specified size"
+    go 0 l
+    unsafeFreezeArray ma
+#endif
+
+-- | Get the computation strategy the states where initialized with.
+--
+-- @since 1.4.0
+workerStatesComp :: WorkerStates s -> Comp
+workerStatesComp = _workerStatesComp
+
+-- | Run a scheduler with stateful workers. Throws `MutexException` if an attempt is made
+-- to concurrently use the same `WorkerStates` with another `SchedulerWS`.
+--
+-- ==== __Examples__
+--
+-- A good example of using stateful workers would be generation of random number in
+-- parallel. A lof of times random number generators are not gonna be thread safe, so we
+-- can work around this problem, by using a separate stateful generator for each of the
+-- workers.
+--
+-- >>> import Control.Monad as M ((>=>), replicateM)
+-- >>> import Control.Concurrent (yield, threadDelay)
+-- >>> import Data.List (sort)
+-- >>> -- ^ Above imports are used to make sure output is deterministic, which is needed for doctest
+-- >>> import System.Random.MWC as MWC
+-- >>> import Data.Vector.Unboxed as V (singleton)
+-- >>> states <- initWorkerStates (ParN 4) (MWC.initialize . V.singleton . fromIntegral . getWorkerId)
+-- >>> let scheduleGen scheduler = scheduleWorkState scheduler (MWC.uniform >=> \r -> yield >> threadDelay 200000 >> pure r)
+-- >>> sort <$> withSchedulerWS states (M.replicateM 4 . scheduleGen) :: IO [Double]
+-- [0.21734983682025255,0.5000843862105709,0.5759825622603018,0.8587171114177893]
+-- >>> sort <$> withSchedulerWS states (M.replicateM 4 . scheduleGen) :: IO [Double]
+-- [2.3598617298033475e-2,9.949679290089553e-2,0.38223134248645885,0.7408640677124702]
+--
+-- In the above example we use four different random number generators from
+-- [`mwc-random`](https://www.stackage.org/package/mwc-random) in order to generate 4
+-- numbers, all in separate threads. The subsequent call to the `withSchedulerWS` function
+-- with the same @states@ is allowed to reuse the same generators, thus avoiding expensive
+-- initialization.
+--
+-- /Side note/ - The example presented was crafted with slight trickery in order to
+-- guarantee that the output is deterministic, so if you run instructions exactly the same
+-- way in GHCI you will get the exact same output. Non-determinism comes from thread
+-- scheduling, rather than from random number generator, because we use exactly the same
+-- seed for each worker, but workers run concurrently. Exact output is not really needed,
+-- except for the doctests to pass.
+--
+-- @since 1.4.0
+withSchedulerWS :: MonadUnliftIO m => WorkerStates s -> (SchedulerWS s m a -> m b) -> m [a]
+withSchedulerWS states action =
+  withRunInIO $ \run -> bracket lockState unlockState (run . runSchedulerWS)
+  where
+    mutex = _workerStatesMutex states
+    lockState = atomicModifyIORef' mutex ((,) True)
+    unlockState wasLocked
+      | wasLocked = pure ()
+      | otherwise = writeIORef mutex False
+    runSchedulerWS isLocked
+      | isLocked = liftIO $ throwIO MutexException
+      | otherwise =
+        withScheduler (_workerStatesComp states) $ \scheduler ->
+          action (SchedulerWS states scheduler)
+
+-- | Run a scheduler with stateful workers, while discarding computation results.
+--
+-- @since 1.4.0
+withSchedulerWS_ :: MonadUnliftIO m => WorkerStates s -> (SchedulerWS s m () -> m b) -> m ()
+withSchedulerWS_ states = void . withSchedulerWS states
+
+
+-- | Schedule a job that will get a worker state passed as an argument
+--
+-- @since 1.4.0
+scheduleWorkState :: SchedulerWS s m a -> (s -> m a) -> m ()
+scheduleWorkState schedulerS withState =
+  scheduleWorkId (_getScheduler schedulerS) $ \(WorkerId i) ->
+    withState (indexArray (_workerStatesArray (_workerStates schedulerS)) i)
+
+-- | Same as `scheduleWorkState`, but dont' keep the result of computation.
+--
+-- @since 1.4.0
+scheduleWorkState_ :: SchedulerWS s m () -> (s -> m ()) -> m ()
+scheduleWorkState_ schedulerS withState =
+  scheduleWorkId_ (_getScheduler schedulerS) $ \(WorkerId i) ->
+    withState (indexArray (_workerStatesArray (_workerStates schedulerS)) i)
 
 
 -- | Get the number of workers. Will mainly depend on the computation strategy and/or number of
@@ -84,7 +208,7 @@ numWorkers = _numWorkers
 -- jobs. Argument supplied to the job will be the id of the worker doing the job.
 --
 -- @since 1.2.0
-scheduleWorkId :: Scheduler m a -> (Int -> m a) -> m ()
+scheduleWorkId :: Scheduler m a -> (WorkerId -> m a) -> m ()
 scheduleWorkId =_scheduleWorkId
 
 -- | As soon as possible try to terminate any computation that is being performed by all workers
@@ -126,7 +250,7 @@ scheduleWork_ = scheduleWork
 -- | Same as `scheduleWorkId`, but only for a `Scheduler` that doesn't keep the results.
 --
 -- @since 1.2.0
-scheduleWorkId_ :: Scheduler m () -> (Int -> m ()) -> m ()
+scheduleWorkId_ :: Scheduler m () -> (WorkerId -> m ()) -> m ()
 scheduleWorkId_ = _scheduleWorkId
 
 -- | Similar to `terminate`, but for a `Scheduler` that does not keep any results of computation.
@@ -138,23 +262,16 @@ terminate_ :: Scheduler m () -> m ()
 terminate_ = (`_terminateWith` ())
 
 -- | The most basic scheduler that simply runs the task instead of scheduling it. Early termination
--- requests are simply ignored.
+-- requests are bluntly ignored.
 --
 -- @since 1.1.0
 trivialScheduler_ :: Applicative f => Scheduler f ()
 trivialScheduler_ = Scheduler
   { _numWorkers = 1
-  , _scheduleWorkId = \f -> f 0
+  , _scheduleWorkId = \f -> f (WorkerId 0)
   , _terminate = const $ pure ()
   , _terminateWith = const $ pure ()
   }
-
-
-data SchedulerOutcome a
-  = SchedulerFinished
-  | SchedulerTerminatedEarly ![a]
-  | SchedulerWorkerException WorkerException
-
 
 
 -- | This is generally a faster way to traverse while ignoring the result rather than using `mapM_`.
@@ -162,7 +279,6 @@ data SchedulerOutcome a
 -- @since 1.0.0
 traverse_ :: (Applicative f, Foldable t) => (a -> f ()) -> t a -> f ()
 traverse_ f = F.foldl' (\c a -> c *> f a) (pure ())
-
 
 -- | Map an action over each element of the `Traversable` @t@ acccording to the supplied computation
 -- strategy.
@@ -203,16 +319,17 @@ replicateConcurrently_ comp n f =
   withScheduler_ comp $ \s -> scheduleWork s $ replicateM_ n (scheduleWork s $ void f)
 
 
-scheduleJobs :: MonadIO m => Jobs m a -> (Int -> m a) -> m ()
+scheduleJobs :: MonadIO m => Jobs m a -> (WorkerId -> m a) -> m ()
 scheduleJobs = scheduleJobsWith mkJob
 
 -- | Similarly to `scheduleWork`, but ignores the result of computation, thus having less overhead.
 --
 -- @since 1.0.0
-scheduleJobs_ :: MonadIO m => Jobs m a -> (Int -> m b) -> m ()
+scheduleJobs_ :: MonadIO m => Jobs m a -> (WorkerId -> m b) -> m ()
 scheduleJobs_ = scheduleJobsWith (\job -> pure (Job_ (void . job)))
 
-scheduleJobsWith :: MonadIO m => ((Int -> m b) -> m (Job m a)) -> Jobs m a -> (Int -> m b) -> m ()
+scheduleJobsWith ::
+     MonadIO m => ((WorkerId -> m b) -> m (Job m a)) -> Jobs m a -> (WorkerId -> m b) -> m ()
 scheduleJobsWith mkJob' jobs action = do
   liftIO $ atomicModifyIORefCAS_ (jobsCountRef jobs) (+ 1)
   job <-
@@ -244,7 +361,7 @@ dropCounterOnZero counterRef onZero = do
 -- | Runs the worker until the job queue is exhausted, at which point it will execute the final task
 -- of retirement and return
 runWorker :: MonadIO m =>
-             Int
+             WorkerId
           -> JQueue m a
           -> m () -- ^ Action to run upon retirement
           -> m ()
@@ -307,7 +424,7 @@ withScheduler_ comp = void . withSchedulerInternal comp scheduleJobs_ (const (pu
 withSchedulerInternal ::
      MonadUnliftIO m
   => Comp -- ^ Computation strategy
-  -> (Jobs m a -> (Int -> m a) -> m ()) -- ^ How to schedule work
+  -> (Jobs m a -> (WorkerId -> m a) -> m ()) -- ^ How to schedule work
   -> (JQueue m a -> m [Maybe a]) -- ^ How to collect results
   -> ([a] -> [a]) -- ^ Adjust results in some way
   -> (Scheduler m a -> m b)
@@ -346,18 +463,18 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
   when (jc == 0) $ scheduleJobs_ jobs (\_ -> pure ())
   let spawnWorkersWith fork ws =
         withRunInIO $ \run ->
-          forM ws $ \w ->
-            fork w $ \unmask ->
+          forM (zip [0 ..] ws) $ \(wId, on) ->
+            fork on $ \unmask ->
               catch
-                (unmask $ run $ runWorker w jobsQueue onRetire)
+                (unmask $ run $ runWorker wId jobsQueue onRetire)
                 (run . handleWorkerException jobsQueue workDoneMVar jobsNumWorkers)
       spawnWorkers =
         case comp of
           Seq -> return []
             -- \ no need to fork threads for a sequential computation
-          Par -> spawnWorkersWith forkOnWithUnmask [0 .. jobsNumWorkers - 1]
+          Par -> spawnWorkersWith forkOnWithUnmask [1 .. jobsNumWorkers]
           ParOn ws -> spawnWorkersWith forkOnWithUnmask ws
-          ParN _ -> spawnWorkersWith (\_ -> forkIOWithUnmask) [0 .. jobsNumWorkers - 1]
+          ParN _ -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 .. jobsNumWorkers]
       terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
       doWork tids = do
         when (comp == Seq) $ runWorker 0 jobsQueue onRetire
@@ -388,23 +505,6 @@ handleWorkerException jQueue workDoneMVar nWorkers exc =
       -- / Do the co-worker cleanup
       retireWorkersN jQueue (nWorkers - 1)
 
-
--- | This exception should normally be never seen in the wild and is for internal use only.
-newtype WorkerException =
-  WorkerException SomeException
-  -- ^ One of workers experienced an exception, main thread will receive the same `SomeException`.
-  deriving (Show)
-
-instance Exception WorkerException
-
-data WorkerTerminateException =
-  WorkerTerminateException
-  -- ^ When a brother worker dies of some exception, all the other ones will be terminated
-  -- asynchronously with this one.
-  deriving (Show)
-
-
-instance Exception WorkerTerminateException
 
 -- Copy from unliftio:
 safeBracketOnError :: MonadUnliftIO m => m a -> (a -> m b) -> (a -> m c) -> m c
