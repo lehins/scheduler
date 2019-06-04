@@ -295,17 +295,17 @@ prop_ReturnsState :: Comp -> Property
 prop_ReturnsState comp = concurrentProperty $ do
   n <- getCompWorkers comp
   state <- initWorkerStates comp (pure . getWorkerId)
-  ids <- withSchedulerS state $ \ schedulerS ->
-    replicateM (numWorkers (unwrapSchedulerS schedulerS)) $
-      scheduleWorkState schedulerS $ \ s -> threadDelay 10000 >> yield >> pure s
+  ids <- withSchedulerWS state $ \ schedulerWS ->
+    replicateM (numWorkers (unwrapSchedulerWS schedulerWS)) $
+      scheduleWorkState schedulerWS $ \ s -> threadDelay 10000 >> yield >> pure s
   pure (sort ids === [0..n-1])
 
 prop_MutexException :: Comp -> Property
 prop_MutexException comp =
   assertExceptionIO (== MutexException) $ do
     state <- initWorkerStates comp (pure . getWorkerId)
-    withSchedulerS_ state $ \schedulerS ->
-      scheduleWorkState_ schedulerS $ \_s -> withSchedulerS_ state $ \_s' -> pure ()
+    withSchedulerWS_ state $ \schedulerWS ->
+      scheduleWorkState_ schedulerWS $ \_s -> withSchedulerWS_ state $ \_s' -> pure ()
 
 
 

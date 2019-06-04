@@ -16,13 +16,13 @@
 module Control.Scheduler
   ( -- * Scheduler
     Scheduler
-  , SchedulerS
+  , SchedulerWS
   , trivialScheduler_
   , withScheduler
   , withScheduler_
-  , withSchedulerS
-  , withSchedulerS_
-  , unwrapSchedulerS
+  , withSchedulerWS
+  , withSchedulerWS_
+  , unwrapSchedulerWS
   -- * Scheduling computation
   , scheduleWork
   , scheduleWork_
@@ -73,8 +73,8 @@ import Control.Monad.ST
 -- | Get the underlying `Scheduler`, which cannot access `WorkerStates`.
 --
 -- @since 1.4.0
-unwrapSchedulerS :: SchedulerS s m a -> Scheduler m a
-unwrapSchedulerS = _getScheduler
+unwrapSchedulerWS :: SchedulerWS s m a -> Scheduler m a
+unwrapSchedulerWS = _getScheduler
 
 
 -- | Initialize a separate state for each worker.
@@ -121,7 +121,7 @@ workerStatesComp :: WorkerStates s -> Comp
 workerStatesComp = _workerStatesComp
 
 -- | Run a scheduler with stateful workers. Throws `MutexException` if an attempt is made
--- to concurrently use the same `WorkerStates` with another `SchedulerS`.
+-- to concurrently use the same `WorkerStates` with another `SchedulerWS`.
 --
 -- ==== __Examples__
 --
@@ -138,14 +138,14 @@ workerStatesComp = _workerStatesComp
 -- >>> import Data.Vector.Unboxed as V (singleton)
 -- >>> states <- initWorkerStates (ParN 4) (MWC.initialize . V.singleton . fromIntegral . getWorkerId)
 -- >>> let scheduleGen scheduler = scheduleWorkState scheduler (MWC.uniform >=> \r -> yield >> threadDelay 200000 >> pure r)
--- >>> sort <$> withSchedulerS states (M.replicateM 4 . scheduleGen) :: IO [Double]
+-- >>> sort <$> withSchedulerWS states (M.replicateM 4 . scheduleGen) :: IO [Double]
 -- [0.21734983682025255,0.5000843862105709,0.5759825622603018,0.8587171114177893]
--- >>> sort <$> withSchedulerS states (M.replicateM 4 . scheduleGen) :: IO [Double]
+-- >>> sort <$> withSchedulerWS states (M.replicateM 4 . scheduleGen) :: IO [Double]
 -- [2.3598617298033475e-2,9.949679290089553e-2,0.38223134248645885,0.7408640677124702]
 --
 -- In the above example we use four different random number generators from
 -- [`mwc-random`](https://www.stackage.org/package/mwc-random) in order to generate 4
--- numbers, all in separate threads. The subsequent call to the `withSchedulerS` function
+-- numbers, all in separate threads. The subsequent call to the `withSchedulerWS` function
 -- with the same @states@ is allowed to reuse the same generators, thus avoiding expensive
 -- initialization.
 --
@@ -157,32 +157,32 @@ workerStatesComp = _workerStatesComp
 -- except for the doctests to pass.
 --
 -- @since 1.4.0
-withSchedulerS :: MonadUnliftIO m => WorkerStates s -> (SchedulerS s m a -> m b) -> m [a]
-withSchedulerS states action =
-  withRunInIO $ \run -> bracket lockState unlockState (run . runSchedulerS)
+withSchedulerWS :: MonadUnliftIO m => WorkerStates s -> (SchedulerWS s m a -> m b) -> m [a]
+withSchedulerWS states action =
+  withRunInIO $ \run -> bracket lockState unlockState (run . runSchedulerWS)
   where
     mutex = _workerStatesMutex states
     lockState = atomicModifyIORef' mutex ((,) True)
     unlockState wasLocked
       | wasLocked = pure ()
       | otherwise = writeIORef mutex False
-    runSchedulerS isLocked
+    runSchedulerWS isLocked
       | isLocked = liftIO $ throwIO MutexException
       | otherwise =
         withScheduler (_workerStatesComp states) $ \scheduler ->
-          action (SchedulerS states scheduler)
+          action (SchedulerWS states scheduler)
 
 -- | Run a scheduler with stateful workers, while discarding computation results.
 --
 -- @since 1.4.0
-withSchedulerS_ :: MonadUnliftIO m => WorkerStates s -> (SchedulerS s m () -> m b) -> m ()
-withSchedulerS_ states = void . withSchedulerS states
+withSchedulerWS_ :: MonadUnliftIO m => WorkerStates s -> (SchedulerWS s m () -> m b) -> m ()
+withSchedulerWS_ states = void . withSchedulerWS states
 
 
 -- | Schedule a job that will get a worker state passed as an argument
 --
 -- @since 1.4.0
-scheduleWorkState :: SchedulerS s m a -> (s -> m a) -> m ()
+scheduleWorkState :: SchedulerWS s m a -> (s -> m a) -> m ()
 scheduleWorkState schedulerS withState =
   scheduleWorkId (_getScheduler schedulerS) $ \(WorkerId i) ->
     withState (indexArray (_workerStatesArray (_workerStates schedulerS)) i)
@@ -190,7 +190,7 @@ scheduleWorkState schedulerS withState =
 -- | Same as `scheduleWorkState`, but dont' keep the result of computation.
 --
 -- @since 1.4.0
-scheduleWorkState_ :: SchedulerS s m () -> (s -> m ()) -> m ()
+scheduleWorkState_ :: SchedulerWS s m () -> (s -> m ()) -> m ()
 scheduleWorkState_ schedulerS withState =
   scheduleWorkId_ (_getScheduler schedulerS) $ \(WorkerId i) ->
     withState (indexArray (_workerStatesArray (_workerStates schedulerS)) i)
@@ -262,7 +262,7 @@ terminate_ :: Scheduler m () -> m ()
 terminate_ = (`_terminateWith` ())
 
 -- | The most basic scheduler that simply runs the task instead of scheduling it. Early termination
--- requests are simply ignored.
+-- requests are bluntly ignored.
 --
 -- @since 1.1.0
 trivialScheduler_ :: Applicative f => Scheduler f ()
@@ -274,13 +274,11 @@ trivialScheduler_ = Scheduler
   }
 
 
-
 -- | This is generally a faster way to traverse while ignoring the result rather than using `mapM_`.
 --
 -- @since 1.0.0
 traverse_ :: (Applicative f, Foldable t) => (a -> f ()) -> t a -> f ()
 traverse_ f = F.foldl' (\c a -> c *> f a) (pure ())
-
 
 -- | Map an action over each element of the `Traversable` @t@ acccording to the supplied computation
 -- strategy.

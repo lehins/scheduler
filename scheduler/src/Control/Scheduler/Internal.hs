@@ -11,7 +11,7 @@
 module Control.Scheduler.Internal
   ( Scheduler(..)
   , WorkerStates(..)
-  , SchedulerS(..)
+  , SchedulerWS(..)
   , Jobs(..)
   , SchedulerOutcome(..)
   , WorkerException(..)
@@ -44,11 +44,11 @@ data Scheduler m a = Scheduler
   }
 
 -- | This is a wrapper around `Scheduler`, but it also keeps a separate state for each
--- individual worker. See `Control.Scheduler.withSchedulerS` or
--- `Control.Scheduler.withSchedulerS_` for ways to construct and use this data type.
+-- individual worker. See `Control.Scheduler.withSchedulerWS` or
+-- `Control.Scheduler.withSchedulerWS_` for ways to construct and use this data type.
 --
 -- @since 1.4.0
-data SchedulerS s m a = SchedulerS
+data SchedulerWS s m a = SchedulerWS
   { _workerStates :: !(WorkerStates s)
   , _getScheduler :: !(Scheduler m a)
   }
