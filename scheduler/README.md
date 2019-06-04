@@ -80,11 +80,11 @@ not be shared between separate threads.
 ```haskell
 λ> let scheduleId = (`scheduleWorkId` (\ i -> threadDelay 100000 >> pure i))
 λ> withScheduler (ParOn [4,7,5]) $ \s -> scheduleId s >> scheduleId s >> scheduleId s
-[4,7,5]
+[WorkerId {getWorkerId = 0},WorkerId {getWorkerId = 1},WorkerId {getWorkerId = 2}]
 λ> withScheduler (ParN 3) $ \s -> scheduleId s >> scheduleId s >> scheduleId s
-[1,2,0]
+[WorkerId {getWorkerId = 1},WorkerId {getWorkerId = 2},WorkerId {getWorkerId = 0}]
 λ> withScheduler (ParN 3) $ \s -> scheduleId s >> scheduleId s >> scheduleId s
-[0,1,2]
+[WorkerId {getWorkerId = 0},WorkerId {getWorkerId = 1},WorkerId {getWorkerId = 2}]
 ```
 
 ### Exceptions

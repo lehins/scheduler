@@ -297,7 +297,7 @@ prop_ReturnsState comp = concurrentProperty $ do
   state <- initWorkerStates comp (pure . getWorkerId)
   ids <- withSchedulerWS state $ \ schedulerWS ->
     replicateM (numWorkers (unwrapSchedulerWS schedulerWS)) $
-      scheduleWorkState schedulerWS $ \ s -> threadDelay 10000 >> yield >> pure s
+      scheduleWorkState schedulerWS $ \ s -> yield >> threadDelay 30000 >> pure s
   pure (sort ids === [0..n-1])
 
 prop_MutexException :: Comp -> Property
