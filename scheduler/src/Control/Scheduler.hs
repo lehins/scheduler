@@ -30,6 +30,7 @@ module Control.Scheduler
   , scheduleWorkId_
   , scheduleWorkState
   , scheduleWorkState_
+  , replicateWork
   , terminate
   , terminate_
   , terminateWith
@@ -233,7 +234,6 @@ terminate = _terminate
 terminateWith :: Scheduler m a -> a -> m a
 terminateWith = _terminateWith
 
-
 -- | Schedule an action to be picked up and computed by a worker from a pool of
 -- jobs. Similar to `scheduleWorkId`, except the job doesn't get the worker id.
 --
@@ -252,6 +252,17 @@ scheduleWork_ = scheduleWork
 -- @since 1.2.0
 scheduleWorkId_ :: Scheduler m () -> (WorkerId -> m ()) -> m ()
 scheduleWorkId_ = _scheduleWorkId
+
+-- | Schedule the same action to run @n@ times concurrently. This differs from
+-- `replicateConcurrently` by allowing the caller to use the `Scheduler` freely,
+-- or to allow early termination via `terminate` across all (identical) threads.
+-- To be called within a `withScheduler` block.
+--
+-- @since 1.4.1
+replicateWork :: Applicative m => Int -> Scheduler m a -> m a -> m ()
+replicateWork !n scheduler f
+  | n <= 0 = pure ()
+  | otherwise = scheduleWork scheduler f *> replicateWork (pred n) scheduler f
 
 -- | Similar to `terminate`, but for a `Scheduler` that does not keep any results of computation.
 --
