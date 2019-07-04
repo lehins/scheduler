@@ -1,3 +1,7 @@
+# 1.4.1
+
+* Add functions: `replicateWork`
+
 # 1.4.0
 
 * Worker id has been promoted from `Int` to a `newtype` wrapper `WorkerId`.
