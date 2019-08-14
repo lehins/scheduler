@@ -12,7 +12,7 @@ import Control.Exception.Base (ArithException(DivideByZero),
                                AsyncException(ThreadKilled))
 import Control.Monad
 import qualified Data.Foldable as F (traverse_)
-import Control.Scheduler
+import Control.Scheduler as S
 import Data.Bits (complement)
 import Data.IORef
 import Data.List (sort)
@@ -89,13 +89,19 @@ prop_Traverse comp xs f =
   where
     f' = pure . apply f
 
--- prop_ReplicateM :: Comp -> [Int] -> Fun Int Int -> Property
--- prop_ReplicateM comp xs f =
---   monadicIO $ run $ do
+replicateSeq :: (Int -> IO Int -> IO [Int]) -> Int -> Fun Int Int -> Property
+replicateSeq justAs n f =
+  concurrentProperty $ do
+    iRef <- newIORef 0
+    jRef <- newIORef 0
+    let g ref = atomicModifyIORef' ref (\i -> (apply f i, i + 1))
+    (===) <$> S.replicateConcurrently Seq n (g jRef) <*> justAs n (g iRef)
 
---   (===) <$> traverse f' xs <*> traverseConcurrently comp f' xs
---   where
---     f' = pure . apply f
+prop_ReplicateM :: Int -> Fun Int Int -> Property
+prop_ReplicateM = replicateSeq replicateM
+
+prop_ReplicateWorkSeq :: Int -> Fun Int Int -> Property
+prop_ReplicateWorkSeq = replicateSeq (\ n g -> withScheduler Seq (\s -> replicateWork n s g))
 
 
 prop_ArbitraryCompNested :: [(Comp, Int)] -> Property
@@ -205,7 +211,7 @@ prop_FinishEarly_ comp =
       scheduleWork_
         scheduler
         (terminate_ scheduler >> yield >> threadDelay 10000 >> writeIORef ref False)
-    property <$> readIORef ref
+    counterexample "Scheduler did not terminte early" <$> readIORef ref
 
 prop_FinishEarly :: Comp -> Property
 prop_FinishEarly comp =
@@ -259,6 +265,14 @@ prop_TrivialSchedulerSameAsSeq_ zs =
     xs <- readIORef xRefs
     ys <- readIORef yRefs
     pure (nSame .&&. xs === ys)
+
+prop_SameAsTrivialScheduler :: Comp -> [Int] -> Fun Int Int -> Property
+prop_SameAsTrivialScheduler comp zs f =
+  concurrentProperty $ do
+    let schedule scheduler = forM_ zs (scheduleWork scheduler . pure . apply f)
+    xs <- withScheduler comp schedule
+    ys <- withTrivialScheduler schedule
+    pure (xs === ys)
 
 newtype Elem = Elem Int deriving (Eq, Show)
 
@@ -329,17 +343,19 @@ spec = do
     it "Recursive" $ timed $ prop_Recursive Seq
     it "Nested" $ timed $ prop_Nested Seq
     it "Serially" $ timed $ prop_Serially Seq
-    it "Trivial" $ timed prop_TrivialSchedulerSameAsSeq_
+    it "TrivialAsSeq_" $ timed prop_TrivialSchedulerSameAsSeq_
+    it "replicateConcurrently == replicateM" $ timed prop_ReplicateM
+    it "replicateConcurrently == replicateWork" $ timed prop_ReplicateWorkSeq
   describe "ParOn" $ do
     it "SameList" $ timed $ \cs -> prop_SameList (ParOn cs)
     it "Recursive" $ timed $ \cs -> prop_Recursive (ParOn cs)
     it "Nested" $ timed $ \cs -> prop_Nested (ParOn cs)
     it "Serially" $ timed $ \cs -> prop_Serially (ParOn cs)
   describe "Arbitrary Comp" $ do
+    it "Trivial" $ timed prop_SameAsTrivialScheduler
     it "ArbitraryNested" $ timed prop_ArbitraryCompNested
     it "AllJobsProcessed" $ timed prop_AllJobsProcessed
     it "traverseConcurrently == traverse" $ timed prop_Traverse
-    --it "replicateConcurrently == replicateM" $ timed prop_ReplicateM
   describe "Exceptions" $ do
     it "CatchDivideByZero" $ timed prop_CatchDivideByZero
     it "CatchDivideByZeroNested" $ timed prop_CatchDivideByZeroNested
