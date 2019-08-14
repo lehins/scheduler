@@ -3,6 +3,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 -- |
@@ -17,12 +18,20 @@ module Control.Scheduler
   ( -- * Scheduler
     Scheduler
   , SchedulerWS
-  , trivialScheduler_
+  , Results(..)
+    -- ** Regular
   , withScheduler
   , withScheduler_
+  , withSchedulerR
+    -- ** Stateful workers
   , withSchedulerWS
   , withSchedulerWS_
+  , withSchedulerWSR
   , unwrapSchedulerWS
+    -- ** Trivial (no parallelism)
+  , trivialScheduler_
+  , withTrivialScheduler
+  , withTrivialSchedulerR
   -- * Scheduling computation
   , scheduleWork
   , scheduleWork_
@@ -58,6 +67,7 @@ import Control.Concurrent
 import Control.Exception
 import Control.Monad
 import Control.Monad.IO.Unlift
+import Control.Monad.Primitive (PrimMonad)
 import Control.Scheduler.Computation
 import Control.Scheduler.Internal
 import Control.Scheduler.Queue
@@ -66,6 +76,7 @@ import qualified Data.Foldable as F (foldl', traverse_)
 import Data.IORef
 import Data.Maybe (catMaybes)
 import Data.Primitive.Array
+import Data.Primitive.MutVar
 import Data.Traversable
 #if !MIN_VERSION_primitive(0,6,2)
 import Control.Monad.ST
@@ -121,6 +132,27 @@ arrayFromListN n l =
 workerStatesComp :: WorkerStates s -> Comp
 workerStatesComp = _workerStatesComp
 
+withSchedulerWSInternal ::
+     MonadUnliftIO m
+  => (Comp -> (Scheduler m a -> t) -> m b)
+  -> WorkerStates s
+  -> (SchedulerWS s m a -> t)
+  -> m b
+withSchedulerWSInternal withScheduler' states action =
+  withRunInIO $ \run -> bracket lockState unlockState (run . runSchedulerWS)
+  where
+    mutex = _workerStatesMutex states
+    lockState = atomicModifyIORef' mutex ((,) True)
+    unlockState wasLocked
+      | wasLocked = pure ()
+      | otherwise = writeIORef mutex False
+    runSchedulerWS isLocked
+      | isLocked = liftIO $ throwIO MutexException
+      | otherwise =
+        withScheduler' (_workerStatesComp states) $ \scheduler ->
+          action (SchedulerWS states scheduler)
+
+
 -- | Run a scheduler with stateful workers. Throws `MutexException` if an attempt is made
 -- to concurrently use the same `WorkerStates` with another `SchedulerWS`.
 --
@@ -159,25 +191,20 @@ workerStatesComp = _workerStatesComp
 --
 -- @since 1.4.0
 withSchedulerWS :: MonadUnliftIO m => WorkerStates s -> (SchedulerWS s m a -> m b) -> m [a]
-withSchedulerWS states action =
-  withRunInIO $ \run -> bracket lockState unlockState (run . runSchedulerWS)
-  where
-    mutex = _workerStatesMutex states
-    lockState = atomicModifyIORef' mutex ((,) True)
-    unlockState wasLocked
-      | wasLocked = pure ()
-      | otherwise = writeIORef mutex False
-    runSchedulerWS isLocked
-      | isLocked = liftIO $ throwIO MutexException
-      | otherwise =
-        withScheduler (_workerStatesComp states) $ \scheduler ->
-          action (SchedulerWS states scheduler)
+withSchedulerWS = withSchedulerWSInternal withScheduler
 
 -- | Run a scheduler with stateful workers, while discarding computation results.
 --
 -- @since 1.4.0
 withSchedulerWS_ :: MonadUnliftIO m => WorkerStates s -> (SchedulerWS s m () -> m b) -> m ()
-withSchedulerWS_ states = void . withSchedulerWS states
+withSchedulerWS_ = withSchedulerWSInternal withScheduler_
+
+-- | Same as `withSchedulerWS`, except instead of a list it produces `Results`, which
+-- allows for distinguishing between the ways computation was terminated.
+--
+-- @since 1.4.2
+withSchedulerWSR :: MonadUnliftIO m => WorkerStates s -> (SchedulerWS s m a -> m b) -> m (Results a)
+withSchedulerWSR = withSchedulerWSInternal withSchedulerR
 
 
 -- | Schedule a job that will get a worker state passed as an argument
@@ -212,9 +239,10 @@ numWorkers = _numWorkers
 scheduleWorkId :: Scheduler m a -> (WorkerId -> m a) -> m ()
 scheduleWorkId =_scheduleWorkId
 
--- | As soon as possible try to terminate any computation that is being performed by all workers
--- managed by this scheduler and collect whatever results have been computed, with supplied
--- element guaranteed to being the last one.
+-- | As soon as possible try to terminate any computation that is being performed by all
+-- workers managed by this scheduler and collect whatever results have been computed, with
+-- supplied element guaranteed to being the last one. In case when `Results` is the return
+-- type this function will cause the scheduler to produce `FinishedEarly`
 --
 -- /Important/ - With `Seq` strategy this will not stop other scheduled tasks from being computed,
 -- although it will make sure their results are discarded.
@@ -224,7 +252,9 @@ terminate :: Scheduler m a -> a -> m a
 terminate = _terminate
 
 -- | Same as `terminate`, but returning a single element list containing the supplied
--- argument. This can be very useful for parallel search algorithms.
+-- argument. This can be very useful for parallel search algorithms. In case when
+-- `Results` is the return type this function will cause the scheduler to produce
+-- `FinishedEarlyWith`
 --
 -- /Important/ - Same as with `terminate`, when `Seq` strategy is used, this will not prevent
 -- computation from continuing, but the scheduler will return only the result supplied to this
@@ -260,9 +290,11 @@ scheduleWorkId_ = _scheduleWorkId
 --
 -- @since 1.4.1
 replicateWork :: Applicative m => Int -> Scheduler m a -> m a -> m ()
-replicateWork !n scheduler f
-  | n <= 0 = pure ()
-  | otherwise = scheduleWork scheduler f *> replicateWork (pred n) scheduler f
+replicateWork !n scheduler f = go n
+  where
+    go k
+      | k <= 0 = pure ()
+      | otherwise = scheduleWork scheduler f *> go (k - 1)
 
 -- | Similar to `terminate`, but for a `Scheduler` that does not keep any results of computation.
 --
@@ -283,6 +315,39 @@ trivialScheduler_ = Scheduler
   , _terminate = const $ pure ()
   , _terminateWith = const $ pure ()
   }
+
+
+-- | This trivial scheduler will behave in the same way as `withScheduler` with `Seq`
+-- computation strategy, except it is restricted to `PrimMonad`, instead of `MonadUnliftIO`.
+--
+-- @since 1.4.2
+withTrivialScheduler :: PrimMonad m => (Scheduler m a -> m b) -> m [a]
+withTrivialScheduler action = resultsToList <$> withTrivialSchedulerR action
+
+-- | This trivial scheduler will behave in the same way as `withSchedulerR` with `Seq`
+-- computation strategy, except it is restricted to `PrimMonad`, instead of `MonadUnliftIO`.
+--
+-- @since 1.4.2
+withTrivialSchedulerR :: PrimMonad m => (Scheduler m a -> m b) -> m (Results a)
+withTrivialSchedulerR action = do
+  resVar <- newMutVar []
+  finResVar <- newMutVar Nothing
+  _ <- action $ Scheduler
+    { _numWorkers = 1
+    , _scheduleWorkId = \f -> do
+        r <- f (WorkerId 0)
+        modifyMutVar' resVar (r:)
+    , _terminate = \r -> do
+        rs <- readMutVar resVar
+        writeMutVar finResVar (Just (FinishedEarly rs r))
+        pure r
+    , _terminateWith = \r -> do
+        writeMutVar finResVar (Just (FinishedEarlyWith r))
+        pure r
+    }
+  readMutVar finResVar >>= \case
+    Just rs -> pure $ reverseResults rs
+    Nothing -> Finished . Prelude.reverse <$> readMutVar resVar
 
 
 -- | This is generally a faster way to traverse while ignoring the result rather than using `mapM_`.
@@ -418,7 +483,19 @@ withScheduler ::
   -> (Scheduler m a -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m [a]
-withScheduler comp = withSchedulerInternal comp scheduleJobs readResults reverse
+withScheduler comp = withSchedulerInternal comp scheduleJobs readResults (reverse . resultsToList)
+
+-- | Same as `withScheduler`, except instead of a list it produces `Results`, which allows
+-- for distinguishing between the ways computation was terminated.
+--
+-- @since 1.4.2
+withSchedulerR ::
+     MonadUnliftIO m
+  => Comp -- ^ Computation strategy
+  -> (Scheduler m a -> m b)
+     -- ^ Action that will be scheduling all the work.
+  -> m (Results a)
+withSchedulerR comp = withSchedulerInternal comp scheduleJobs readResults reverseResults
 
 
 -- | Same as `withScheduler`, but discards results of submitted jobs.
@@ -430,17 +507,17 @@ withScheduler_ ::
   -> (Scheduler m a -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m ()
-withScheduler_ comp = void . withSchedulerInternal comp scheduleJobs_ (const (pure [])) id
+withScheduler_ comp = void . withSchedulerInternal comp scheduleJobs_ (const (pure [])) (const ())
 
 withSchedulerInternal ::
      MonadUnliftIO m
   => Comp -- ^ Computation strategy
   -> (Jobs m a -> (WorkerId -> m a) -> m ()) -- ^ How to schedule work
   -> (JQueue m a -> m [Maybe a]) -- ^ How to collect results
-  -> ([a] -> [a]) -- ^ Adjust results in some way
+  -> (Results a -> c) -- ^ Adjust results in some way
   -> (Scheduler m a -> m b)
      -- ^ Action that will be scheduling all the work.
-  -> m [a]
+  -> m c
 withSchedulerInternal comp submitWork collect adjust onScheduler = do
   jobsNumWorkers <- getCompWorkers comp
   sWorkersCounterRef <- liftIO $ newIORef jobsNumWorkers
@@ -455,12 +532,14 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
           , _terminate =
               \a -> do
                 mas <- collect jobsQueue
-                let as = adjust (a : catMaybes mas)
-                liftIO $ void $ tryPutMVar workDoneMVar $ SchedulerTerminatedEarly as
+                let as = catMaybes mas
+                liftIO $
+                  void $ tryPutMVar workDoneMVar $ SchedulerTerminatedEarly (FinishedEarly as a)
                 pure a
           , _terminateWith =
               \a -> do
-                liftIO $ void $ tryPutMVar workDoneMVar $ SchedulerTerminatedEarly [a]
+                liftIO $
+                  void $ tryPutMVar workDoneMVar $ SchedulerTerminatedEarly (FinishedEarlyWith a)
                 pure a
           }
       onRetire =
@@ -489,18 +568,32 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
       terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
       doWork tids = do
         when (comp == Seq) $ runWorker 0 jobsQueue onRetire
-        mExc <- liftIO $ readMVar workDoneMVar
-        -- \ wait for all worker to finish. If any one of them had a problem this MVar will
-        -- contain an exception
+        mExc <- liftIO (readMVar workDoneMVar)
+        -- \ wait for all worker to finish. If any one of the workers had a problem, then
+        -- this MVar will contain an exception
         case mExc of
-          SchedulerFinished -> adjust . catMaybes <$> collect jobsQueue
+          SchedulerFinished -> adjust . Finished . catMaybes <$> collect jobsQueue
           -- \ Now we are sure all workers have done their job we can safely read all of the
           -- IORefs with results
-          SchedulerTerminatedEarly as -> terminateWorkers tids >> pure as
+          SchedulerTerminatedEarly as -> terminateWorkers tids >> pure (adjust as)
           SchedulerWorkerException (WorkerException exc) -> liftIO $ throwIO exc
           -- \ Here we need to unwrap the legit worker exception and rethrow it, so the main thread
           -- will think like it's his own
   safeBracketOnError spawnWorkers terminateWorkers doWork
+
+
+resultsToList :: Results a -> [a]
+resultsToList = \case
+  Finished rs -> rs
+  FinishedEarly rs r -> r:rs
+  FinishedEarlyWith r -> [r]
+
+
+reverseResults :: Results a -> Results a
+reverseResults = \case
+  Finished rs -> Finished (reverse rs)
+  FinishedEarly rs r -> FinishedEarly (reverse rs) r
+  res -> res
 
 
 -- | Specialized exception handler for the work scheduler.

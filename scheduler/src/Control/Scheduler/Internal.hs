@@ -13,6 +13,7 @@ module Control.Scheduler.Internal
   , WorkerStates(..)
   , SchedulerWS(..)
   , Jobs(..)
+  , Results(..)
   , SchedulerOutcome(..)
   , WorkerException(..)
   , WorkerTerminateException(..)
@@ -25,6 +26,16 @@ import Control.Scheduler.Queue
 import Data.IORef
 import Data.Primitive.Array
 
+-- | Computated outcome of scheduled jobs.
+--
+-- @since 1.4.2
+data Results a
+  = Finished ![a]
+  -- ^ Finished normally with all scheduled jobs completed
+  | FinishedEarly ![a] !a
+  -- ^ Finished early by the means of `Control.Scheduler.terminate`.
+  | FinishedEarlyWith !a
+  -- ^ Finished early by the means of `Control.Scheduler.terminateWith`.
 
 data Jobs m a = Jobs
   { jobsNumWorkers :: {-# UNPACK #-} !Int
@@ -68,7 +79,7 @@ data WorkerStates s = WorkerStates
 
 data SchedulerOutcome a
   = SchedulerFinished
-  | SchedulerTerminatedEarly ![a]
+  | SchedulerTerminatedEarly !(Results a)
   | SchedulerWorkerException WorkerException
 
 

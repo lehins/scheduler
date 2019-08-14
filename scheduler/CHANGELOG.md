@@ -1,3 +1,11 @@
+# 1.4.2
+
+* Add `withTrivialScheduler`
+* Add `Results` data type as well as corresponding functions:
+  * `withSchedulerR`
+  * `withSchedulerWSR`
+  * `withTrivialSchedulerR`
+
 # 1.4.1
 
 * Add functions: `replicateWork`
