@@ -11,7 +11,7 @@ import qualified Control.Exception as EUnsafe
 import Control.Exception.Base (ArithException(DivideByZero),
                                AsyncException(ThreadKilled))
 import Control.Monad
-import qualified Data.Foldable as F (traverse_)
+import qualified Data.Foldable as F (traverse_, toList)
 import Control.Scheduler as S
 import Data.Bits (complement)
 import Data.IORef
@@ -211,25 +211,27 @@ prop_FinishEarly_ comp =
       scheduleWork_
         scheduler
         (terminate_ scheduler >> yield >> threadDelay 10000 >> writeIORef ref False)
-    counterexample "Scheduler did not terminte early" <$> readIORef ref
+    counterexample "Scheduler did not terminate early" <$> readIORef ref
 
 prop_FinishEarly :: Comp -> Property
 prop_FinishEarly comp =
   concurrentProperty $ do
-    res <-
-      withScheduler comp $ \scheduler -> do
-        scheduleWork scheduler (pure (2 :: Int))
-        scheduleWork scheduler (threadDelay 10000 >> terminate scheduler 3 >> pure 1)
-    pure (res === [2, 3])
+    let scheduleJobs scheduler = do
+          scheduleWork scheduler (pure (2 :: Int))
+          scheduleWork scheduler (threadDelay 10000 >> terminate scheduler 3 >> pure 1)
+    res <- withScheduler comp scheduleJobs
+    res' <- withSchedulerR comp scheduleJobs
+    pure (res === [2, 3] .&&. res' === FinishedEarly [2] 3)
 
 prop_FinishEarlyWith :: Comp -> Int -> Property
 prop_FinishEarlyWith comp n =
   concurrentProperty $ do
-    res <-
-      withScheduler comp $ \scheduler -> do
-        scheduleWork scheduler $ pure (complement (n + 1))
-        scheduleWork scheduler $ terminateWith scheduler n >> pure (complement n)
-    pure (res === [n])
+    let scheduleJobs scheduler = do
+          scheduleWork scheduler $ pure (complement (n + 1))
+          scheduleWork scheduler $ terminateWith scheduler n >> pure (complement n)
+    res <- withScheduler comp scheduleJobs
+    res' <- withSchedulerR comp scheduleJobs
+    pure (res === [n] .&&. res' === FinishedEarlyWith n)
 
 prop_FinishBeforeStarting :: Comp -> Property
 prop_FinishBeforeStarting comp =
@@ -306,13 +308,17 @@ prop_TraverseConcurrentlyInfinite_ comp xs x =
 
 
 prop_ReturnsState :: Comp -> Property
-prop_ReturnsState comp = concurrentProperty $ do
-  n <- getCompWorkers comp
-  state <- initWorkerStates comp (pure . getWorkerId)
-  ids <- withSchedulerWS state $ \ schedulerWS ->
-    replicateM (numWorkers (unwrapSchedulerWS schedulerWS)) $
-      scheduleWorkState schedulerWS $ \ s -> yield >> threadDelay 30000 >> pure s
-  pure (sort ids === [0..n-1])
+prop_ReturnsState comp =
+  concurrentProperty $ do
+    n <- getCompWorkers comp
+    state <- initWorkerStates comp (pure . getWorkerId)
+    let scheduleJobs schedulerWS =
+          replicateM (numWorkers (unwrapSchedulerWS schedulerWS)) $
+          scheduleWorkState schedulerWS $ \s -> yield >> threadDelay 30000 >> pure s
+    ids <- withSchedulerWS state scheduleJobs
+    let idsSorted = sort ids
+    ids' <- withSchedulerWSR state scheduleJobs
+    pure (idsSorted === [0 .. n - 1] .&&. sort (F.toList ids') === idsSorted)
 
 prop_MutexException :: Comp -> Property
 prop_MutexException comp =

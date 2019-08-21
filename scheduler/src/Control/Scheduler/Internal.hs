@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# OPTIONS_HADDOCK hide, not-home #-}
 {-# LANGUAGE Unsafe #-}
 -- |
@@ -36,6 +37,34 @@ data Results a
   -- ^ Finished early by the means of `Control.Scheduler.terminate`.
   | FinishedEarlyWith !a
   -- ^ Finished early by the means of `Control.Scheduler.terminateWith`.
+  deriving (Show, Eq)
+
+instance Functor Results where
+  fmap f =
+    \case
+      Finished xs -> Finished (fmap f xs)
+      FinishedEarly xs x -> FinishedEarly (fmap f xs) (f x)
+      FinishedEarlyWith x -> FinishedEarlyWith (f x)
+
+instance Foldable Results where
+  foldr f acc =
+    \case
+      Finished xs -> foldr f acc xs
+      FinishedEarly xs x -> foldr f (f x acc) xs
+      FinishedEarlyWith x -> f x acc
+  foldr1 f =
+    \case
+      Finished xs -> foldr1 f xs
+      FinishedEarly xs x -> foldr f x xs
+      FinishedEarlyWith x -> x
+
+instance Traversable Results where
+  traverse f =
+    \case
+      Finished xs -> Finished <$> traverse f xs
+      FinishedEarly xs x -> FinishedEarly <$> traverse f xs <*> f x
+      FinishedEarlyWith x -> FinishedEarlyWith <$> f x
+
 
 data Jobs m a = Jobs
   { jobsNumWorkers :: {-# UNPACK #-} !Int
