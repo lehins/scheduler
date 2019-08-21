@@ -45,7 +45,7 @@ data Queue m a = Queue
 -- @since 1.4.0
 newtype WorkerId = WorkerId
   { getWorkerId :: Int
-  } deriving (Show, Eq, Ord, Enum, Num)
+  } deriving (Show, Read, Eq, Ord, Enum, Num)
 
 
 popQueue :: Queue m a -> Maybe (Job m a, Queue m a)

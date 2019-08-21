@@ -37,7 +37,7 @@ data Results a
   -- ^ Finished early by the means of `Control.Scheduler.terminate`.
   | FinishedEarlyWith !a
   -- ^ Finished early by the means of `Control.Scheduler.terminateWith`.
-  deriving (Show, Eq)
+  deriving (Show, Read, Eq)
 
 instance Functor Results where
   fmap f =
@@ -122,7 +122,7 @@ instance Exception WorkerException
 
 data WorkerTerminateException =
   WorkerTerminateException
-  -- ^ When a brother worker dies of some exception, all the other ones will be terminated
+  -- ^ When a co-worker dies of some exception, all the other ones will be terminated
   -- asynchronously with this one.
   deriving (Show)
 
