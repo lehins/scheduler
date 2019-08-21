@@ -324,8 +324,9 @@ trivialScheduler_ = Scheduler
 withTrivialScheduler :: PrimMonad m => (Scheduler m a -> m b) -> m [a]
 withTrivialScheduler action = resultsToList <$> withTrivialSchedulerR action
 
--- | This trivial scheduler will behave in the same way as `withSchedulerR` with `Seq`
--- computation strategy, except it is restricted to `PrimMonad`, instead of `MonadUnliftIO`.
+-- | This trivial scheduler will behave in a similar way as `withSchedulerR` with `Seq`
+-- computation strategy, except it is restricted to `PrimMonad`, instead of
+-- `MonadUnliftIO` and the work isn't scheduled, but rather computed immediately.
 --
 -- @since 1.4.2
 withTrivialSchedulerR :: PrimMonad m => (Scheduler m a -> m b) -> m (Results a)

@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 module Control.SchedulerSpec
   ( spec
   ) where
@@ -11,15 +12,20 @@ import qualified Control.Exception as EUnsafe
 import Control.Exception.Base (ArithException(DivideByZero),
                                AsyncException(ThreadKilled))
 import Control.Monad
-import qualified Data.Foldable as F (traverse_, toList)
 import Control.Scheduler as S
 import Data.Bits (complement)
+import qualified Data.Foldable as F (toList, traverse_)
 import Data.IORef
-import Data.List (sort)
+import Data.List (groupBy, sort, sortOn)
 import Test.Hspec
 import Test.QuickCheck
 import Test.QuickCheck.Function
 import Test.QuickCheck.Monadic
+import Test.Validity.Eq
+import Test.Validity.Functor
+import Test.Validity.Monoid
+import Test.Validity.Ord
+import Test.Validity.Show
 import UnliftIO.Async
 import UnliftIO.Exception hiding (assert)
 #if !MIN_VERSION_base(4,11,0)
@@ -276,6 +282,25 @@ prop_SameAsTrivialScheduler comp zs f =
     ys <- withTrivialScheduler schedule
     pure (xs === ys)
 
+prop_TerminateSeq ::
+     ((Scheduler IO Int -> IO ()) -> IO (Results Int)) -> [Int] -> Int -> [Int] -> Expectation
+prop_TerminateSeq withSchedulerR' xs x ys = do
+  rs <- withSchedulerR' $ \ scheduler -> do
+    forM_ xs (scheduleWork scheduler . pure)
+    _ <- scheduleWork scheduler $ terminate scheduler x
+    forM_ ys (scheduleWork scheduler . pure)
+  rs `shouldBe` FinishedEarly xs x
+
+prop_TerminateWithSeq ::
+     ((Scheduler IO Int -> IO ()) -> IO (Results Int)) -> [Int] -> Int -> [Int] -> Expectation
+prop_TerminateWithSeq withSchedulerR' xs x ys = do
+  rs <- withSchedulerR' $ \ scheduler -> do
+    forM_ xs (scheduleWork scheduler . pure)
+    _ <- scheduleWork scheduler $ terminateWith scheduler x
+    forM_ ys (scheduleWork scheduler . pure)
+  rs `shouldBe` FinishedEarlyWith x
+
+
 newtype Elem = Elem Int deriving (Eq, Show)
 
 instance Exception Elem
@@ -307,18 +332,35 @@ prop_TraverseConcurrentlyInfinite_ comp xs x =
     return (eRes === eRes')
 
 
-prop_ReturnsState :: Comp -> Property
-prop_ReturnsState comp =
-  concurrentProperty $ do
-    n <- getCompWorkers comp
-    state <- initWorkerStates comp (pure . getWorkerId)
-    let scheduleJobs schedulerWS =
-          replicateM (numWorkers (unwrapSchedulerWS schedulerWS)) $
-          scheduleWorkState schedulerWS $ \s -> yield >> threadDelay 30000 >> pure s
-    ids <- withSchedulerWS state scheduleJobs
-    let idsSorted = sort ids
-    ids' <- withSchedulerWSR state scheduleJobs
-    pure (idsSorted === [0 .. n - 1] .&&. sort (F.toList ids') === idsSorted)
+prop_WorkerStateExclusive :: Comp -> NonNegative Int -> Expectation
+prop_WorkerStateExclusive comp (NonNegative n) = do
+  state <- initWorkerStates comp (\wid -> (,) wid <$> newIORef (0 :: Int))
+  workerStatesComp state `shouldBe` comp
+  nWorkers <- getCompWorkers comp
+  let scheduleJobs schedulerWS = do
+        replicateM n $
+          scheduleWorkState schedulerWS $ \(wid, ref) -> do
+            counter <- readIORef ref
+            writeIORef ref (counter + 1)
+            pure (wid, counter)
+      gather = map (sortOn snd) . groupBy (\x y -> fst x == fst y) . sortOn fst
+      isMonotonicStartingAt _ [] = True
+      isMonotonicStartingAt k (k':ks) = k == k' && isMonotonicStartingAt (k + 1) ks
+      baseIds = [(wid, -1) | wid <- [0 .. WorkerId nWorkers - 1]]
+  ids <- withSchedulerWS state scheduleJobs
+  length ids `shouldBe` n
+  let gathered = gather (ids ++ baseIds)
+  map (map snd) gathered `shouldSatisfy` all (isMonotonicStartingAt (-1))
+  ids' <- withSchedulerWSR state scheduleJobs
+  length ids' `shouldBe` n
+  let gathered' = gather (baseIds ++ ids ++ F.toList ids')
+  map (map snd) gathered' `shouldSatisfy` all (isMonotonicStartingAt (-1))
+  withSchedulerWS_ state $ \schedulerWS -> do
+    numWorkers (unwrapSchedulerWS schedulerWS) `shouldBe` nWorkers
+    replicateM (10 * n) $
+      scheduleWorkState_ schedulerWS $ \(wid, ref) -> do
+        counter <- readIORef ref
+        when (counter > 0) $ snd (last (gathered' !! getWorkerId wid)) `shouldBe` pred counter
 
 prop_MutexException :: Comp -> Property
 prop_MutexException comp =
@@ -326,7 +368,6 @@ prop_MutexException comp =
     state <- initWorkerStates comp (pure . getWorkerId)
     withSchedulerWS_ state $ \schedulerWS ->
       scheduleWorkState_ schedulerWS $ \_s -> withSchedulerWS_ state $ \_s' -> pure ()
-
 
 
 spec :: Spec
@@ -339,11 +380,42 @@ spec = do
         property $ \(x :: Comp) y z -> x <> (y <> z) === (x <> y) <> z
       it "mconcat = foldr '(<>)' mempty" $
         property $ \(xs :: [Comp]) -> mconcat xs === foldr (<>) mempty xs
+      eqSpecOnArbitrary @Comp
+      monoidSpecOnArbitrary @Comp
     describe "Show" $ do
       it "show == showsPrec 0" $ property $ \(x :: Comp) -> x `deepseq` show x === showsPrec 0 x ""
       it "(show) == showsPrec 1" $
         property $ \(x :: Comp) (Positive n) ->
           x /= Seq && x /= Par ==> ("(" <> show x <> ")" === showsPrec n x "")
+  describe "Results" $ do
+    eqSpecOnArbitrary @(Results Int)
+    functorSpecOnArbitrary @Results
+    showReadSpecOnArbitrary @(Results Int)
+    it "Traversable" $ property $ \(rs :: Results Int) (f :: Fun Int (Maybe Int)) ->
+      traverse (apply f) (F.toList rs) === fmap F.toList (traverse (apply f) rs)
+  describe "WorkerId" $ do
+    eqSpecOnArbitrary @WorkerId
+    ordSpecOnArbitrary @WorkerId
+    it "MaxMin" $ property $ \x y ->
+      conjoin [ max (WorkerId x) (WorkerId y) === WorkerId (max x y)
+              , min (WorkerId x) (WorkerId y) === WorkerId (min x y)
+              ]
+    showReadSpecOnArbitrary @WorkerId
+    describe "Enum" $ do
+      it "toEnumFromEnum" $ property $ \ wid@(WorkerId i) ->
+        toEnum (getWorkerId wid) === wid .&&. fromEnum wid === i
+      it "succ . pred" $ property $ \ wid@(WorkerId i) ->
+        i /= minBound && i /= maxBound ==>
+        succ (pred wid) === wid .&&. pred (succ wid) === wid
+  describe "Trivial" $ do
+    it "WorkerIdIsZero" $ do
+      scheduleWorkId trivialScheduler_ (`shouldBe` 0)
+      withTrivialScheduler (`scheduleWorkId` pure) `shouldReturn` [0]
+    it "TerminateDoesNothing" $ do
+      terminate_ trivialScheduler_ `shouldReturn` ()
+      terminateWith trivialScheduler_ () `shouldReturn` ()
+    it "TerminateSeq" $ timed $ prop_TerminateSeq withTrivialSchedulerR
+    it "TerminateWithSeq" $ timed $ prop_TerminateWithSeq withTrivialSchedulerR
   describe "Seq" $ do
     it "SameList" $ timed $ prop_SameList Seq
     it "Recursive" $ timed $ prop_Recursive Seq
@@ -352,6 +424,10 @@ spec = do
     it "TrivialAsSeq_" $ timed prop_TrivialSchedulerSameAsSeq_
     it "replicateConcurrently == replicateM" $ timed prop_ReplicateM
     it "replicateConcurrently == replicateWork" $ timed prop_ReplicateWorkSeq
+    it "WorkerIdIsZero" $
+      withScheduler Seq (`scheduleWorkId` pure) `shouldReturn` [0]
+    it "TerminateSeq" $ timed $ prop_TerminateSeq (withSchedulerR Seq)
+    it "TerminateWithSeq" $ timed $ prop_TerminateWithSeq (withSchedulerR Seq)
   describe "ParOn" $ do
     it "SameList" $ timed $ \cs -> prop_SameList (ParOn cs)
     it "Recursive" $ timed $ \cs -> prop_Recursive (ParOn cs)
@@ -379,8 +455,19 @@ spec = do
     it "FinishBeforeStarting" $ timed prop_FinishBeforeStarting
     it "FinishWithBeforeStarting" $ timed prop_FinishWithBeforeStarting
   describe "WorkerState" $ do
-    it "ReturnsState" $ timed prop_ReturnsState
     it "MutexException" $ timed prop_MutexException
+    it "WorkerStateExclusive" $ timed prop_WorkerStateExclusive
+
+instance Arbitrary WorkerId where
+  arbitrary = WorkerId <$> arbitrary
+
+instance Arbitrary a => Arbitrary (Results a) where
+  arbitrary =
+    oneof
+      [ Finished <$> arbitrary
+      , FinishedEarly <$> arbitrary <*> arbitrary
+      , FinishedEarlyWith <$> arbitrary
+      ]
 
 timed :: Testable prop => prop -> Property
 timed = within 2000000

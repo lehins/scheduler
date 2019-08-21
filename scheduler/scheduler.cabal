@@ -45,6 +45,7 @@ test-suite tests
                     , Control.SchedulerSpec
   build-depends:      base
                     , deepseq
+                    , genvalidity-hspec
                     , scheduler
                     , hspec
                     , QuickCheck
