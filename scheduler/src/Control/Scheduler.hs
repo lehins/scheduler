@@ -292,7 +292,7 @@ scheduleWorkId_ = _scheduleWorkId
 replicateWork :: Applicative m => Int -> Scheduler m a -> m a -> m ()
 replicateWork !n scheduler f = go n
   where
-    go k
+    go !k
       | k <= 0 = pure ()
       | otherwise = scheduleWork scheduler f *> go (k - 1)
 
