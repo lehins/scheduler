@@ -72,7 +72,7 @@ import Control.Scheduler.Computation
 import Control.Scheduler.Internal
 import Control.Scheduler.Queue
 import Data.Atomics (atomicModifyIORefCAS, atomicModifyIORefCAS_)
-import qualified Data.Foldable as F (foldl', traverse_)
+import qualified Data.Foldable as F (foldl', traverse_, toList)
 import Data.IORef
 import Data.Maybe (catMaybes)
 import Data.Primitive.Array
@@ -322,7 +322,7 @@ trivialScheduler_ = Scheduler
 --
 -- @since 1.4.2
 withTrivialScheduler :: PrimMonad m => (Scheduler m a -> m b) -> m [a]
-withTrivialScheduler action = resultsToList <$> withTrivialSchedulerR action
+withTrivialScheduler action = F.toList <$> withTrivialSchedulerR action
 
 -- | This trivial scheduler will behave in a similar way as `withSchedulerR` with `Seq`
 -- computation strategy, except it is restricted to `PrimMonad`, instead of
@@ -370,7 +370,7 @@ transList :: Traversable t => [a] -> t b -> t a
 transList xs' = snd . mapAccumL withR xs'
   where
     withR (x:xs) _ = (xs, x)
-    withR _      _ = error "Impossible<traverseConcurrently> - Mismatched sizes"
+    withR _      _ = errorWithoutStackTrace "Impossible<traverseConcurrently> - Mismatched sizes"
 
 -- | Just like `traverseConcurrently`, but restricted to `Foldable` and discards the results of
 -- computation.
