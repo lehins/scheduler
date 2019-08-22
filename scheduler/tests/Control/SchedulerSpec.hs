@@ -282,23 +282,39 @@ prop_SameAsTrivialScheduler comp zs f =
     ys <- withTrivialScheduler schedule
     pure (xs === ys)
 
-prop_TerminateSeq ::
-     ((Scheduler IO Int -> IO ()) -> IO (Results Int)) -> [Int] -> Int -> [Int] -> Expectation
-prop_TerminateSeq withSchedulerR' xs x ys = do
+prop_Terminate ::
+     (Show a, Eq a)
+  => ((Scheduler IO Int -> IO ()) -> IO a)
+  -> (Scheduler IO Int -> Int -> IO Int)
+  -> ([Int] -> Int -> a)
+  -> [Int]
+  -> Int
+  -> [Int]
+  -> Expectation
+prop_Terminate withSchedulerR' term expected xs x ys = do
   rs <- withSchedulerR' $ \ scheduler -> do
     forM_ xs (scheduleWork scheduler . pure)
-    _ <- scheduleWork scheduler $ terminate scheduler x
+    _ <- scheduleWork scheduler $ term scheduler x
     forM_ ys (scheduleWork scheduler . pure)
-  rs `shouldBe` FinishedEarly xs x
+  rs `shouldBe` expected xs x
 
-prop_TerminateWithSeq ::
-     ((Scheduler IO Int -> IO ()) -> IO (Results Int)) -> [Int] -> Int -> [Int] -> Expectation
-prop_TerminateWithSeq withSchedulerR' xs x ys = do
-  rs <- withSchedulerR' $ \ scheduler -> do
-    forM_ xs (scheduleWork scheduler . pure)
-    _ <- scheduleWork scheduler $ terminateWith scheduler x
-    forM_ ys (scheduleWork scheduler . pure)
-  rs `shouldBe` FinishedEarlyWith x
+-- prop_TerminateSeq ::
+--      ((Scheduler IO Int -> IO ()) -> IO (Results Int)) -> [Int] -> Int -> [Int] -> Expectation
+-- prop_TerminateSeq withSchedulerR' xs x ys = do
+--   rs <- withSchedulerR' $ \ scheduler -> do
+--     forM_ xs (scheduleWork scheduler . pure)
+--     _ <- scheduleWork scheduler $ terminate scheduler x
+--     forM_ ys (scheduleWork scheduler . pure)
+--   rs `shouldBe` FinishedEarly xs x
+
+-- prop_TerminateWithSeq ::
+--      ((Scheduler IO Int -> IO ()) -> IO (Results Int)) -> [Int] -> Int -> [Int] -> Expectation
+-- prop_TerminateWithSeq withSchedulerR' xs x ys = do
+--   rs <- withSchedulerR' $ \ scheduler -> do
+--     forM_ xs (scheduleWork scheduler . pure)
+--     _ <- scheduleWork scheduler $ terminateWith scheduler x
+--     forM_ ys (scheduleWork scheduler . pure)
+--   rs `shouldBe` FinishedEarlyWith x
 
 
 newtype Elem = Elem Int deriving (Eq, Show)
@@ -413,9 +429,13 @@ spec = do
       withTrivialScheduler (`scheduleWorkId` pure) `shouldReturn` [0]
     it "TerminateDoesNothing" $ do
       terminate_ trivialScheduler_ `shouldReturn` ()
+      terminate trivialScheduler_ () `shouldReturn` ()
       terminateWith trivialScheduler_ () `shouldReturn` ()
-    it "TerminateSeq" $ timed $ prop_TerminateSeq withTrivialSchedulerR
-    it "TerminateWithSeq" $ timed $ prop_TerminateWithSeq withTrivialSchedulerR
+    it "TerminateSeq" $ timed $ prop_Terminate withTrivialScheduler terminate (\xs x -> xs ++ [x])
+    it "TerminateWithSeq" $ timed $ prop_Terminate withTrivialScheduler terminateWith (\_ x -> [x])
+    it "TerminateSeqR" $ timed $ prop_Terminate withTrivialSchedulerR terminate FinishedEarly
+    it "TerminateWithSeqR" $
+      timed $ prop_Terminate withTrivialSchedulerR terminateWith (const FinishedEarlyWith)
   describe "Seq" $ do
     it "SameList" $ timed $ prop_SameList Seq
     it "Recursive" $ timed $ prop_Recursive Seq
@@ -426,8 +446,11 @@ spec = do
     it "replicateConcurrently == replicateWork" $ timed prop_ReplicateWorkSeq
     it "WorkerIdIsZero" $
       withScheduler Seq (`scheduleWorkId` pure) `shouldReturn` [0]
-    it "TerminateSeq" $ timed $ prop_TerminateSeq (withSchedulerR Seq)
-    it "TerminateWithSeq" $ timed $ prop_TerminateWithSeq (withSchedulerR Seq)
+    it "TerminateSeq" $ timed $ prop_Terminate (withScheduler Seq) terminate (\xs x -> xs ++ [x])
+    it "TerminateWithSeq" $ timed $ prop_Terminate (withScheduler Seq) terminateWith (\_ x -> [x])
+    it "TerminateSeqR" $ timed $ prop_Terminate (withSchedulerR Seq) terminate FinishedEarly
+    it "TerminateWithSeqR" $
+      timed $ prop_Terminate (withSchedulerR Seq) terminateWith (const FinishedEarlyWith)
   describe "ParOn" $ do
     it "SameList" $ timed $ \cs -> prop_SameList (ParOn cs)
     it "Recursive" $ timed $ \cs -> prop_Recursive (ParOn cs)
