@@ -27,7 +27,7 @@ import Control.Scheduler.Queue
 import Data.IORef
 import Data.Primitive.Array
 
--- | Computated outcome of scheduled jobs.
+-- | Computed outcome of scheduled jobs.
 --
 -- @since 1.4.2
 data Results a
