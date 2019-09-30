@@ -1,5 +1,5 @@
 name:                scheduler
-version:             1.4.2
+version:             1.4.2.1
 synopsis:            Work stealing scheduler.
 description:         A work stealing scheduler that is primarly developed for [massiv](https://github.com/lehins/massiv) array librarry, but it is general enough to be useful for any computation that fits the model of few workers many jobs.
 homepage:            https://github.com/lehins/haskell-scheduler
@@ -76,7 +76,6 @@ benchmark scheduler
                      , async
                      , criterion
                      , deepseq
-                     , fib
                      , monad-par
                      , scheduler
                      , parallel
