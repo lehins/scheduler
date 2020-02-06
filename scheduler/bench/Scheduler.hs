@@ -71,7 +71,7 @@ mkBenchReplicate name n x fxIO fxPar =
     , bench "unliftio/pooledReplicateConcurrently" $
       nfIO $ pooledReplicateConcurrently n (newIORef x >>= fxIO)
     , bench "streamly/replicateM" $
-      nfIO $ S.runStream $ asyncly $ S.replicateM n (newIORef x >>= fxIO)
+      nfIO $ S.drain $ asyncly $ S.replicateM n (newIORef x >>= fxIO)
     , bench "async/replicateConcurrently" $ nfIO $ A.replicateConcurrently n (newIORef x >>= fxIO)
     , bench "monad-par/replicateM" $ nfIO $ runParIO $ replicateM n (newFull_ x >>= fxPar)
     , bench "base/replicateM" $ nfIO $ replicateM n (newIORef x >>= fxIO)
@@ -93,7 +93,7 @@ mkBenchMap name n fxIO fxParIO fxPar =
     ("map/" <> name <> str)
     [ bench "scheduler/traverseConcurrently" $ nfIO $ traverseConcurrently Par fxIO [1 .. n]
     , bench "unliftio/pooledTraverseConcurrently" $ nfIO $ pooledMapConcurrently fxIO [1 .. n]
-    , bench "streamly/mapM" $ nfIO $ S.runStream $ asyncly $ S.mapM fxIO $ S.enumerateFromTo 1 n
+    , bench "streamly/mapM" $ nfIO $ S.drain $ asyncly $ S.mapM fxIO $ S.enumerateFromTo 1 n
     , bench "async/mapConcurrently" $ nfIO $ A.mapConcurrently fxIO [1 .. n]
     , bench "par/mapM" $ nfIO $ mapM fxParIO [1 .. n]
     , bench "monad-par/mapM" $ nfIO $ runParIO $ mapM fxPar [1 .. n]
