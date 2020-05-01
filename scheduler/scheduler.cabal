@@ -74,6 +74,7 @@ benchmark scheduler
   ghc-options:         -threaded -O2 -rtsopts -with-rtsopts=-N
   build-depends:       base
                      , async
+                     , async-pool
                      , criterion
                      , deepseq
                      , monad-par

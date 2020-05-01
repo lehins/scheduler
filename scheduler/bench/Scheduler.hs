@@ -1,3 +1,5 @@
+{-# LANGUAGE BangPatterns #-}
+
 module Main where
 
 import qualified Control.Concurrent.Async as A (mapConcurrently, replicateConcurrently)
@@ -5,6 +7,8 @@ import Control.Monad (replicateM)
 import Control.Monad.Par (IVar, Par, get, newFull_, runParIO) --, parMapM)
 import Control.Parallel (par)
 import Control.Scheduler
+import Control.Concurrent (getNumCapabilities)
+import Control.Concurrent.Async.Pool as AsyncPool
 import Criterion.Main
 import Control.DeepSeq
 import Data.Foldable as F
@@ -15,12 +19,14 @@ import qualified Streamly.Prelude as S
 import UnliftIO.Async (pooledMapConcurrently, pooledReplicateConcurrently)
 
 main :: IO ()
-main =
-  defaultMain
-    (--[mkBenchReplicate "Fib" n x fibIORef fibParVar | n <- [1000], x <- [10000]] ++
-     [mkBenchReplicate "Sum" n x sumIORef sumParVar | n <- [1000], x <- [1000]] ++
-     --[mkBenchMap "Fib" n fibIO fibParIO fibPar | n <- [2000]] ++
-     [mkBenchMap "Sum" n sumIO sumParIO sumPar | n <- [2000]])
+main = do
+  caps <- getNumCapabilities
+  AsyncPool.withTaskGroup caps $ \ !taskGroup ->
+    defaultMain
+      (--[mkBenchReplicate "Fib" n x fibIORef fibParVar | n <- [1000], x <- [10000]] ++
+       [mkBenchReplicate taskGroup "Sum" n x sumIORef sumParVar | n <- [1000], x <- [1000]] ++
+       --[mkBenchMap "Fib" n fibIO fibParIO fibPar | n <- [2000]] ++
+       [mkBenchMap taskGroup "Sum" n sumIO sumParIO sumPar | n <- [2000]])
   where
     -- fibIO :: Int -> IO Integer
     -- fibIO x = do
@@ -57,13 +63,14 @@ main =
 
 mkBenchReplicate ::
      NFData a
-  => String
+  => TaskGroup
+  -> String
   -> Int -- ^ Number of tasks
   -> Int -- ^ Opaque Int a function should be applied to
   -> (IORef Int -> IO a)
   -> (IVar Int -> Par a)
   -> Benchmark
-mkBenchReplicate name n x fxIO fxPar =
+mkBenchReplicate _taskGroup name n x fxIO fxPar =
   bgroup
     ("replicate/" <> name <> str)
     [ bench "scheduler/replicateConcurrently" $
@@ -82,19 +89,22 @@ mkBenchReplicate name n x fxIO fxPar =
 
 mkBenchMap ::
      NFData a
-  => String
+  => TaskGroup
+  -> String
   -> Int -- ^ Number of tasks
   -> (Int -> IO a)
   -> (Int -> IO a)
   -> (Int -> Par a)
   -> Benchmark
-mkBenchMap name n fxIO fxParIO fxPar =
+mkBenchMap taskGroup name n fxIO fxParIO fxPar =
   bgroup
     ("map/" <> name <> str)
     [ bench "scheduler/traverseConcurrently" $ nfIO $ traverseConcurrently Par fxIO [1 .. n]
-    , bench "unliftio/pooledTraverseConcurrently" $ nfIO $ pooledMapConcurrently fxIO [1 .. n]
+    , bench "unliftio/pooledMapConcurrently" $ nfIO $ pooledMapConcurrently fxIO [1 .. n]
     , bench "streamly/mapM" $ nfIO $ S.drain $ asyncly $ S.mapM fxIO $ S.enumerateFromTo 1 n
     , bench "async/mapConcurrently" $ nfIO $ A.mapConcurrently fxIO [1 .. n]
+    , bench "async-pool/mapConcurrently" $
+      nfIO $ AsyncPool.mapConcurrently taskGroup fxIO [1 .. n]
     , bench "par/mapM" $ nfIO $ mapM fxParIO [1 .. n]
     , bench "monad-par/mapM" $ nfIO $ runParIO $ mapM fxPar [1 .. n]
     , bench "base/mapM" $ nfIO $ mapM fxIO [1 .. n]
