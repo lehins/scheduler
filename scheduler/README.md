@@ -5,9 +5,9 @@ This is a work stealing scheduler, which is very useful for tasks parallelizatio
 Whenever you have many actions you'd like to perform in parallel, but would only like to use a few
 threads to do the actual computation, this package is for you.
 
-| Language | Travis | AppVeyor | Hackage | Nightly | LTS |
-|:--------:|:------:|:--------:|:-------:|:-------:|:---:|
-| ![GitHub top language](https://img.shields.io/github/languages/top/lehins/haskell-scheduler.svg) | [![Travis](https://img.shields.io/travis/lehins/haskell-scheduler/master.svg?label=Linux%20%26%20OS%20X)](https://travis-ci.org/lehins/haskell-scheduler) | [![AppVeyor](https://img.shields.io/appveyor/ci/lehins/haskell-scheduler/master.svg?label=Windows)](https://ci.appveyor.com/project/lehins/haskell-scheduler) | [![Hackage](https://img.shields.io/hackage/v/scheduler.svg)](https://hackage.haskell.org/package/scheduler)| [![Nightly](https://www.stackage.org/package/scheduler/badge/nightly)](https://www.stackage.org/nightly/package/scheduler) | [![Nightly](https://www.stackage.org/package/scheduler/badge/lts)](https://www.stackage.org/lts/package/scheduler) |
+| Language | Travis | Azure | Coveralls | Hackage | Nightly | LTS |
+|:--------:|:------:|:-----:|:---------:|:-------:|:-------:|:---:|
+| ![GitHub top language](https://img.shields.io/github/languages/top/lehins/haskell-scheduler.svg) | [![Travis](https://img.shields.io/travis/lehins/haskell-scheduler/master.svg?label=Linux%20%26%20OS%20X)](https://travis-ci.org/lehins/haskell-scheduler) | [![Build Status](https://dev.azure.com/kuleshevich/haskell-scheduler/_apis/build/status/lehins.haskell-scheduler?branchName=master)](https://dev.azure.com/kuleshevich/haskell-scheduler/_build?definitionId=1&branchName=master) | [![Coverage Status](https://coveralls.io/repos/github/lehins/haskell-scheduler/badge.svg?branch=master)](https://coveralls.io/github/lehins/haskell-scheduler?branch=master) | [![Hackage](https://img.shields.io/hackage/v/scheduler.svg)](https://hackage.haskell.org/package/scheduler)| [![Nightly](https://www.stackage.org/package/scheduler/badge/nightly)](https://www.stackage.org/nightly/package/scheduler) | [![Nightly](https://www.stackage.org/package/scheduler/badge/lts)](https://www.stackage.org/lts/package/scheduler) |
 
 
 ## QuickStart

@@ -24,9 +24,9 @@ matrix:
   # - env: GHC="8.8.3" RESOLVER="lts-16"
   #   os: osx
 
-
-  - env: GHC="8.0.2" RESOLVER="lts-9.21" STACK_YAML="stack-extra-deps.yaml"
-    addons: {apt: {packages: [libgmp-dev]}}
+  # Weird ghc build error
+  # - env: GHC="8.0.2" RESOLVER="lts-9.21" STACK_YAML="stack-extra-deps.yaml"
+  #   addons: {apt: {packages: [libgmp-dev]}}
 
   - env: GHC="8.2.2" RESOLVER="lts-11.22" STACK_YAML="stack-extra-deps.yaml"
     addons: {apt: {packages: [libgmp-dev]}}
@@ -37,10 +37,10 @@ matrix:
   - env: GHC="8.4.4" RESOLVER="lts-12.26" STACK_YAML="stack-extra-deps.yaml"
     addons: {apt: {packages: [libgmp-dev]}}
 
-  - env: GHC="8.6.3" RESOLVER="lts-13.9"
+  - env: GHC="8.6.3" RESOLVER="lts-13.9" STACK_YAML="stack-extra-deps.yaml"
     addons: {apt: {packages: [libgmp-dev]}}
 
-  - env: GHC="8.6.4" RESOLVER="lts-13.19"
+  - env: GHC="8.6.4" RESOLVER="lts-13.19" STACK_YAML="stack-extra-deps.yaml"
     addons: {apt: {packages: [libgmp-dev]}}
 
   - env: GHC="8.6.5" RESOLVER="lts-14.27" STACK_YAML="stack-coveralls.yaml" COVERALLS_STACK_YAML="stack-coveralls.yaml"
