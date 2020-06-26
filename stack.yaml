@@ -2,8 +2,7 @@ resolver: lts-16.1
 
 packages:
 - 'scheduler/'
+- 'scheduler-benchmarks/'
 
 extra-deps:
-- semirings-0.4.2@sha256:7803a3bd8add49c375da59d456b59e32ea02a88ac1a1d71132420e4c976333f3,3750
-- streamly-0.7.0@sha256:2a510275b3a41f1e50d8f45f8dac879933139652509dd6cd98b69a5d24e9c55d,31563
 - async-pool-0.9.1@sha256:4015140f896c3f1652b06a679b0ade2717d05557970c283ea2c372a71be2a6a1,1605
