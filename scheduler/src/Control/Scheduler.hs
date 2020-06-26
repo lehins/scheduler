@@ -75,12 +75,9 @@ import Data.Atomics (atomicModifyIORefCAS, atomicModifyIORefCAS_)
 import qualified Data.Foldable as F (foldl', traverse_, toList)
 import Data.IORef
 import Data.Maybe (catMaybes)
-import Data.Primitive.Array
+import Data.Primitive.SmallArray
 import Data.Primitive.MutVar
 import Data.Traversable
-#if !MIN_VERSION_primitive(0,6,2)
-import Control.Monad.ST
-#endif
 
 -- | Get the underlying `Scheduler`, which cannot access `WorkerStates`.
 --
@@ -95,36 +92,17 @@ unwrapSchedulerWS = _getScheduler
 initWorkerStates :: MonadIO m => Comp -> (WorkerId -> m s) -> m (WorkerStates s)
 initWorkerStates comp initState = do
   nWorkers <- getCompWorkers comp
-  workerStates <- mapM (initState . WorkerId) [0 .. nWorkers - 1]
+  arr <- liftIO $ newSmallArray nWorkers (error "Uninitialized")
+  let go i = when (i < nWorkers) $ do
+        state <- initState (WorkerId i)
+        liftIO $ writeSmallArray arr i state
+        go (i + 1)
+  go 0
+  workerStates <- liftIO $ unsafeFreezeSmallArray arr
   mutex <- liftIO $ newIORef False
   pure
     WorkerStates
-      { _workerStatesComp = comp
-      , _workerStatesArray = arrayFromListN nWorkers workerStates
-      , _workerStatesMutex = mutex
-      }
-
-arrayFromListN :: Int -> [a] -> Array a
-#if MIN_VERSION_primitive(0,6,2)
-arrayFromListN = fromListN
-#else
--- Modified copy from primitive-0.7.0.0
-arrayFromListN n l =
-  runST $ do
-    ma <- newArray n (error "initWorkerStates: uninitialized element")
-    let go !ix [] =
-          if ix == n
-            then return ()
-            else error "initWorkerStates: list length less than specified size"
-        go !ix (x:xs) =
-          if ix < n
-            then do
-              writeArray ma ix x
-              go (ix + 1) xs
-            else error "initWorkerStates: list length greater than specified size"
-    go 0 l
-    unsafeFreezeArray ma
-#endif
+      {_workerStatesComp = comp, _workerStatesArray = workerStates, _workerStatesMutex = mutex}
 
 -- | Get the computation strategy the states where initialized with.
 --
@@ -213,7 +191,7 @@ withSchedulerWSR = withSchedulerWSInternal withSchedulerR
 scheduleWorkState :: SchedulerWS s m a -> (s -> m a) -> m ()
 scheduleWorkState schedulerS withState =
   scheduleWorkId (_getScheduler schedulerS) $ \(WorkerId i) ->
-    withState (indexArray (_workerStatesArray (_workerStates schedulerS)) i)
+    withState (indexSmallArray (_workerStatesArray (_workerStates schedulerS)) i)
 
 -- | Same as `scheduleWorkState`, but dont' keep the result of computation.
 --
@@ -221,7 +199,7 @@ scheduleWorkState schedulerS withState =
 scheduleWorkState_ :: SchedulerWS s m () -> (s -> m ()) -> m ()
 scheduleWorkState_ schedulerS withState =
   scheduleWorkId_ (_getScheduler schedulerS) $ \(WorkerId i) ->
-    withState (indexArray (_workerStatesArray (_workerStates schedulerS)) i)
+    withState (indexSmallArray (_workerStatesArray (_workerStates schedulerS)) i)
 
 
 -- | Get the number of workers. Will mainly depend on the computation strategy and/or number of
@@ -463,10 +441,10 @@ runWorker wId jQueue onRetire = go
 -- * It is ok to initialize multiple schedulers at the same time, although that will likely result
 --   in suboptimal performance, unless workers are pinned to different capabilities.
 --
--- * __Warning__ It is pretty dangerous to schedule jobs that do blocking `IO`, since it can easily
---   lead to deadlock, if you are not careful. Consider this example. First execution works fine,
---   since there are two scheduled workers, and one can unblock the other, but the second scenario
---   immediately results in a deadlock.
+-- * __Warning__ It is pretty dangerous to schedule jobs that can block, because it might
+--   lead to a potential deadlock, if you are not careful. Consider this example. First
+--   execution works fine, since there are two scheduled workers, and one can unblock the
+--   other, but the second scenario immediately results in a deadlock.
 --
 -- >>> withScheduler (ParOn [1,2]) $ \s -> newEmptyMVar >>= (\ mv -> scheduleWork s (readMVar mv) >> scheduleWork s (putMVar mv ()))
 -- [(),()]

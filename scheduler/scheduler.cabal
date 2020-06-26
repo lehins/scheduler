@@ -1,5 +1,5 @@
 name:                scheduler
-version:             1.4.2.2
+version:             1.4.2.3
 synopsis:            Work stealing scheduler.
 description:         A work stealing scheduler that is primarily developed for [massiv](https://github.com/lehins/massiv) array library, but it is general enough to be useful for any computation that fits the model of few workers and many jobs.
 homepage:            https://github.com/lehins/haskell-scheduler
@@ -31,7 +31,7 @@ library
                      , deepseq
                      , exceptions
                      , unliftio-core
-                     , primitive      >= 0.5.2.1
+                     , primitive      >= 0.6.4
 
   default-language:    Haskell2010
   ghc-options:         -Wall

@@ -25,7 +25,7 @@ import Control.Exception
 import Control.Scheduler.Computation
 import Control.Scheduler.Queue
 import Data.IORef
-import Data.Primitive.Array
+import Data.Primitive.SmallArray
 
 -- | Computed outcome of scheduled jobs.
 --
@@ -101,7 +101,7 @@ data SchedulerWS s m a = SchedulerWS
 -- @since 1.4.0
 data WorkerStates s = WorkerStates
   { _workerStatesComp  :: !Comp
-  , _workerStatesArray :: !(Array s)
+  , _workerStatesArray :: !(SmallArray s)
   , _workerStatesMutex :: !(IORef Bool)
   }
 

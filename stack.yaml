@@ -1,7 +1,7 @@
-resolver: lts-13.27
+resolver: lts-16.1
 
 packages:
-  - 'scheduler/'
+- 'scheduler/'
 
 extra-deps:
 - semirings-0.4.2@sha256:7803a3bd8add49c375da59d456b59e32ea02a88ac1a1d71132420e4c976333f3,3750
