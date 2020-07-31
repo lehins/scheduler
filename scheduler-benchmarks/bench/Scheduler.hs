@@ -3,7 +3,7 @@
 module Main where
 
 import qualified Control.Concurrent.Async as A (mapConcurrently, replicateConcurrently)
-import Control.Monad (replicateM)
+import Control.Monad (replicateM_, replicateM)
 import Control.Monad.Par (IVar, Par, get, newFull_, runParIO) --, parMapM)
 import Control.Parallel (par)
 import Control.Scheduler
@@ -20,42 +20,52 @@ import UnliftIO.Async (pooledMapConcurrently, pooledReplicateConcurrently)
 
 main :: IO ()
 main = do
+  let k = 10000
   caps <- getNumCapabilities
   AsyncPool.withTaskGroup caps $ \ !taskGroup ->
-    defaultMain
-      (--[mkBenchReplicate "Fib" n x fibIORef fibParVar | n <- [1000], x <- [10000]] ++
-       [mkBenchReplicate taskGroup "Sum" n x sumIORef sumParVar | n <- [1000], x <- [1000]] ++
-       --[mkBenchMap "Fib" n fibIO fibParIO fibPar | n <- [2000]] ++
-       [mkBenchMap taskGroup "Sum" n sumIO sumParIO sumPar | n <- [2000]])
+    defaultMain $
+    [ bgroup
+        "withScheduler"
+        [ bgroup
+            "noop"
+            [ bench "Seq" $ whnfIO (withScheduler_ Seq (\_ -> pure ()))
+            , bench "Par" $ whnfIO (withScheduler_ Par (\_ -> pure ()))
+            , bench "Par'" $ whnfIO (withScheduler_ Par' (\_ -> pure ()))
+            ]
+        , let schedule s = replicateM_ k $ scheduleWork_ s (pure ())
+           in bgroup
+                ("pure () - " ++ show k)
+                [ bench "trivial" $ whnfIO (schedule trivialScheduler_)
+                , bench "Seq" $ whnfIO (withScheduler_ Seq schedule)
+                , bench "Par" $ whnfIO (withScheduler_ Par schedule)
+                , bench "Par'" $ whnfIO (withScheduler_ Par' schedule)
+                ]
+        , let schedule s = replicateM_ k $ scheduleWork s (pure ())
+           in bgroup
+                ("pure [()] - " ++ show k)
+                [ bench "trivial" $ whnfIO (withTrivialScheduler schedule)
+                , bench "Seq" $ whnfIO (withScheduler Seq schedule)
+                , bench "Par" $ whnfIO (withScheduler Par schedule)
+                , bench "Par'" $ whnfIO (withScheduler Par' schedule)
+                ]
+        ]
+    , bgroup "libraries" $
+      [mkBenchReplicate taskGroup "Sum" n x sumIORef sumParVar | n <- [1000], x <- [1000]] ++
+      [mkBenchMap taskGroup "Sum" n sumIO sumParIO sumPar | n <- [2000]]
+    ]
   where
-    -- fibIO :: Int -> IO Integer
-    -- fibIO x = do
-    --   let y = fib $ toInteger x
-    --   y `seq` pure y
-    -- fibParIO :: Int -> IO Integer
-    -- fibParIO x = do
-    --   let y = fib $ toInteger x
-    --   y `par` pure y
-    -- fibPar :: Int -> Par Integer
-    -- fibPar x = do
-    --   let y = fib $ toInteger x
-    --   y `seq` pure y
     sumIO :: Int -> IO Int
     sumIO x = do
-      let y = F.foldl' (+) 0 [x .. 100*x]
+      let y = F.foldl' (+) 0 [x .. 100 * x]
       y `seq` pure y
     sumParIO :: Int -> IO Int
     sumParIO x = do
-      let y = F.foldl' (+) 0 [x .. 100*x]
+      let y = F.foldl' (+) 0 [x .. 100 * x]
       y `par` pure y
     sumPar :: Int -> Par Int
     sumPar x = do
-      let y = F.foldl' (+) 0 [x .. 100*x]
+      let y = F.foldl' (+) 0 [x .. 100 * x]
       y `seq` pure y
-    -- fibIORef :: IORef Int -> IO Integer
-    -- fibIORef xRef = readIORef xRef >>= fibIO
-    -- fibParVar :: IVar Int -> Par Integer
-    -- fibParVar ivar = get ivar >>= fibPar
     sumIORef :: IORef Int -> IO Int
     sumIORef xRef = readIORef xRef >>= sumIO
     sumParVar :: IVar Int -> Par Int
