@@ -329,6 +329,34 @@ withTrivialSchedulerR action = do
     Nothing -> Finished . Prelude.reverse <$> readMutVar resVar
 
 
+withTrivialSchedulerIO_ :: MonadUnliftIO f => (Scheduler f a -> f b) -> f ()
+withTrivialSchedulerIO_ action = void $ withTrivialSchedulerRIO action
+
+withTrivialSchedulerIO :: MonadUnliftIO f => (Scheduler f a -> f b) -> f [a]
+withTrivialSchedulerIO action = F.toList <$> withTrivialSchedulerRIO action
+
+withTrivialSchedulerRIO :: MonadUnliftIO m => (Scheduler m a -> m b) -> m (Results a)
+withTrivialSchedulerRIO action = do
+  resVar <- liftIO $ newIORef []
+  finResVar <- liftIO $ newIORef Nothing
+  _ <- action $ Scheduler
+    { _numWorkers = 1
+    , _scheduleWorkId = \f -> do
+        r <- f (WorkerId 0)
+        r `seq` liftIO (atomicModifyIORefCAS_ resVar (r:))
+    , _terminate = \ !r -> do
+        rs <- liftIO $ readIORef resVar
+        liftIO $ writeIORef finResVar (Just (FinishedEarly rs r))
+        pure r
+    , _terminateWith = \ !r -> do
+        liftIO $ writeIORef finResVar (Just (FinishedEarlyWith r))
+        pure r
+    }
+  liftIO (readIORef finResVar) >>= \case
+    Just rs -> pure $ reverseResults rs
+    Nothing -> Finished . Prelude.reverse <$> liftIO (readIORef resVar)
+
+
 -- | This is generally a faster way to traverse while ignoring the result rather than using `mapM_`.
 --
 -- @since 1.0.0
@@ -462,6 +490,7 @@ withScheduler ::
   -> (Scheduler m a -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m [a]
+withScheduler Seq = withTrivialSchedulerIO
 withScheduler comp = withSchedulerInternal comp scheduleJobs readResults (reverse . resultsToList)
 
 -- | Same as `withScheduler`, except instead of a list it produces `Results`, which allows
@@ -474,6 +503,7 @@ withSchedulerR ::
   -> (Scheduler m a -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m (Results a)
+withSchedulerR Seq = withTrivialSchedulerRIO
 withSchedulerR comp = withSchedulerInternal comp scheduleJobs readResults reverseResults
 
 
@@ -486,6 +516,7 @@ withScheduler_ ::
   -> (Scheduler m a -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m ()
+withScheduler_ Seq = withTrivialSchedulerIO_
 withScheduler_ comp = void . withSchedulerInternal comp scheduleJobs_ (const (pure [])) (const ())
 
 withSchedulerInternal ::

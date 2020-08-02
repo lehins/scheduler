@@ -132,7 +132,8 @@ prop_CatchDivideByZero comp k xs =
 
 -- | Ensure proper exception handling.
 prop_CatchDivideByZeroNested :: Comp -> Int -> Positive Int -> Property
-prop_CatchDivideByZeroNested comp a (Positive k) = assertExceptionIO (== DivideByZero) (schedule k)
+prop_CatchDivideByZeroNested comp a (Positive k) =
+  assertExceptionIO (== DivideByZero) (schedule k)
   where
     schedule i
       | i < 0 = return []
