@@ -18,6 +18,7 @@ import qualified Data.Foldable as F (toList, traverse_)
 import Data.IORef
 import Data.List (groupBy, sort, sortOn)
 import Test.Hspec
+import Test.Hspec.QuickCheck
 import Test.QuickCheck
 import Test.QuickCheck.Function
 import Test.QuickCheck.Monadic
@@ -32,8 +33,15 @@ import UnliftIO.Exception hiding (assert)
 import Data.Semigroup
 #endif
 
-concurrentProperty :: IO Property -> Property
-concurrentProperty = within 1000000 . monadicIO . run
+
+concurrentProperty :: Testable prop => prop -> Property
+concurrentProperty = within 1000000
+
+concurrentExpectation :: Expectation -> Property
+concurrentExpectation = concurrentProperty
+
+concurrentPropertyIO :: IO Property -> Property
+concurrentPropertyIO = concurrentProperty . monadicIO . run
 
 instance Arbitrary Comp where
   arbitrary =
@@ -46,13 +54,13 @@ instance Arbitrary Comp where
 
 prop_SameList :: Comp -> [Int] -> Property
 prop_SameList comp xs =
-  concurrentProperty $ do
+  concurrentPropertyIO $ do
     xs' <- withScheduler comp $ \scheduler -> mapM_ (scheduleWork scheduler . return) xs
     return (xs === xs')
 
 prop_Recursive :: Comp -> [Int] -> Property
 prop_Recursive comp xs =
-  concurrentProperty $ do
+  concurrentPropertyIO $ do
     xs' <- withScheduler comp (schedule xs)
     return (sort xs === sort xs')
   where
@@ -62,7 +70,7 @@ prop_Recursive comp xs =
 
 prop_Serially :: Comp -> [Int] -> Property
 prop_Serially comp xs =
-  concurrentProperty $ do
+  concurrentPropertyIO $ do
     xs' <- schedule xs
     return (xs === concat xs')
   where
@@ -74,7 +82,7 @@ prop_Serially comp xs =
 
 prop_Nested :: Comp -> [Int] -> Property
 prop_Nested comp xs =
-  concurrentProperty $ do
+  concurrentPropertyIO $ do
     xs' <- schedule xs
     return (sort xs === sort (concat xs'))
   where
@@ -85,34 +93,36 @@ prop_Nested comp xs =
 -- | Check whether all jobs have been completed (similar roprop_Traverse)
 prop_AllJobsProcessed :: Comp -> [Int] -> Property
 prop_AllJobsProcessed comp jobs =
+  concurrentProperty $
   monadicIO
     ((=== jobs) <$>
      run (withScheduler comp $ \scheduler -> mapM_ (scheduleWork scheduler . pure) jobs))
 
 prop_Traverse :: Comp -> [Int] -> Fun Int Int -> Property
 prop_Traverse comp xs f =
-  concurrentProperty $ (===) <$> traverse f' xs <*> traverseConcurrently comp f' xs
+  concurrentPropertyIO $ (===) <$> traverse f' xs <*> traverseConcurrently comp f' xs
   where
     f' = pure . apply f
 
 replicateSeq :: (Int -> IO Int -> IO [Int]) -> Int -> Fun Int Int -> Property
 replicateSeq justAs n f =
-  concurrentProperty $ do
+  concurrentPropertyIO $ do
     iRef <- newIORef 0
     jRef <- newIORef 0
     let g ref = atomicModifyIORef' ref (\i -> (apply f i, i + 1))
     (===) <$> S.replicateConcurrently Seq n (g jRef) <*> justAs n (g iRef)
 
 prop_ReplicateM :: Int -> Fun Int Int -> Property
-prop_ReplicateM = replicateSeq replicateM
+prop_ReplicateM i = concurrentProperty . replicateSeq replicateM i
 
 prop_ReplicateWorkSeq :: Int -> Fun Int Int -> Property
-prop_ReplicateWorkSeq = replicateSeq (\ n g -> withScheduler Seq (\s -> replicateWork n s g))
+prop_ReplicateWorkSeq i =
+  concurrentProperty . replicateSeq (\ n g -> withScheduler Seq (\s -> replicateWork n s g)) i
 
 
 prop_ArbitraryCompNested :: [(Comp, Int)] -> Property
 prop_ArbitraryCompNested xs =
-  concurrentProperty $ do
+  concurrentPropertyIO $ do
     xs' <- schedule xs
     return (sort (map snd xs) === sort (concat xs'))
   where
@@ -123,6 +133,7 @@ prop_ArbitraryCompNested xs =
 -- | Ensure proper exception handling.
 prop_CatchDivideByZero :: Comp -> Int -> [Positive Int] -> Property
 prop_CatchDivideByZero comp k xs =
+  concurrentProperty $
   assertExceptionIO
     (== DivideByZero)
     (traverseConcurrently
@@ -133,7 +144,7 @@ prop_CatchDivideByZero comp k xs =
 -- | Ensure proper exception handling.
 prop_CatchDivideByZeroNested :: Comp -> Int -> Positive Int -> Property
 prop_CatchDivideByZeroNested comp a (Positive k) =
-  assertExceptionIO (== DivideByZero) (schedule k)
+  concurrentProperty $ assertExceptionIO (== DivideByZero) (schedule k)
   where
     schedule i
       | i < 0 = return []
@@ -144,6 +155,7 @@ prop_CatchDivideByZeroNested comp a (Positive k) =
 -- | Make sure one co-worker can kill another one, of course when there are at least two of.
 prop_KillBlockedCoworker :: Comp -> Property
 prop_KillBlockedCoworker comp =
+  concurrentProperty $
   assertExceptionIO
     (== DivideByZero)
     (withScheduler_ comp $ \scheduler ->
@@ -157,6 +169,7 @@ prop_KillBlockedCoworker comp =
 -- | Make sure one co-worker can kill another one, of course when there are at least two of.
 prop_KillSleepingCoworker :: Comp -> Property
 prop_KillSleepingCoworker comp =
+  concurrentProperty $
   assertExceptionIO
     (== DivideByZero)
     (withScheduler_ comp $ \scheduler -> do
@@ -168,6 +181,7 @@ prop_KillSleepingCoworker comp =
 
 prop_ExpectAsyncException :: Comp -> Property
 prop_ExpectAsyncException comp =
+  concurrentProperty $
   let didAWorkerDie =
         EUnsafe.handleJust EUnsafe.asyncExceptionFromException (return . (== EUnsafe.ThreadKilled)) .
         fmap or
@@ -178,6 +192,7 @@ prop_ExpectAsyncException comp =
 
 prop_WorkerCaughtAsyncException :: Positive Int -> Property
 prop_WorkerCaughtAsyncException (Positive n) =
+  concurrentProperty $
   assertExceptionIO (== DivideByZero) $ do
     lock <- newEmptyMVar
     result <-
@@ -202,6 +217,7 @@ prop_WorkerCaughtAsyncException (Positive n) =
 -- | Make sure there is no problems if sub-schedules worker get killed
 prop_AllWorkersDied :: Comp -> Comp -> Positive Int -> Property
 prop_AllWorkersDied comp1 comp (Positive n) =
+  concurrentProperty $
   assertAsyncExceptionIO
     (== ThreadKilled)
     (withScheduler_ comp1 $ \scheduler1 ->
@@ -212,7 +228,7 @@ prop_AllWorkersDied comp1 comp (Positive n) =
 
 prop_FinishEarly_ :: Comp -> Property
 prop_FinishEarly_ comp =
-  comp /= Seq ==> concurrentProperty $ do
+  comp /= Seq ==> concurrentPropertyIO $ do
     ref <- newIORef True
     withScheduler_ comp $ \scheduler ->
       scheduleWork_
@@ -222,7 +238,7 @@ prop_FinishEarly_ comp =
 
 prop_FinishEarly :: Comp -> Property
 prop_FinishEarly comp =
-  concurrentProperty $ do
+  concurrentPropertyIO $ do
     let scheduleJobs scheduler = do
           scheduleWork scheduler (pure (2 :: Int))
           scheduleWork scheduler (threadDelay 10000 >> terminate scheduler 3 >> pure 1)
@@ -232,7 +248,7 @@ prop_FinishEarly comp =
 
 prop_FinishEarlyWith :: Comp -> Int -> Property
 prop_FinishEarlyWith comp n =
-  concurrentProperty $ do
+  concurrentPropertyIO $ do
     let scheduleJobs scheduler = do
           scheduleWork scheduler $ pure (complement (n + 1))
           scheduleWork scheduler $ terminateWith scheduler n >> pure (complement n)
@@ -242,7 +258,7 @@ prop_FinishEarlyWith comp n =
 
 prop_FinishBeforeStarting :: Comp -> Property
 prop_FinishBeforeStarting comp =
-  concurrentProperty $ do
+  concurrentPropertyIO $ do
     res <-
       withScheduler comp $ \scheduler -> do
         void $ terminate scheduler 1
@@ -251,7 +267,7 @@ prop_FinishBeforeStarting comp =
 
 prop_FinishWithBeforeStarting :: Comp -> Int -> Property
 prop_FinishWithBeforeStarting comp n =
-  concurrentProperty $ do
+  concurrentPropertyIO $ do
     res <-
       withScheduler comp $ \scheduler -> do
         void $ terminateWith scheduler n
@@ -260,7 +276,7 @@ prop_FinishWithBeforeStarting comp n =
 
 prop_TrivialSchedulerSameAsSeq_ :: [Int] -> Property
 prop_TrivialSchedulerSameAsSeq_ zs =
-  concurrentProperty $ do
+  concurrentPropertyIO $ do
     let consRef xsRef x = atomicModifyIORef' xsRef $ \ xs -> (x:xs, ())
         trivial = trivialScheduler_
     nRef <- newIORef False
@@ -277,7 +293,7 @@ prop_TrivialSchedulerSameAsSeq_ zs =
 
 prop_SameAsTrivialScheduler :: Comp -> [Int] -> Fun Int Int -> Property
 prop_SameAsTrivialScheduler comp zs f =
-  concurrentProperty $ do
+  concurrentPropertyIO $ do
     let schedule scheduler = forM_ zs (scheduleWork scheduler . pure . apply f)
     xs <- withScheduler comp schedule
     ys <- withTrivialScheduler schedule
@@ -291,13 +307,15 @@ prop_Terminate ::
   -> [Int]
   -> Int
   -> [Int]
-  -> Expectation
-prop_Terminate withSchedulerR' term expected xs x ys = do
-  rs <- withSchedulerR' $ \ scheduler -> do
-    forM_ xs (scheduleWork scheduler . pure)
-    _ <- scheduleWork scheduler $ term scheduler x
-    forM_ ys (scheduleWork scheduler . pure)
-  rs `shouldBe` expected xs x
+  -> Property
+prop_Terminate withSchedulerR' term expected xs x ys =
+  concurrentExpectation $ do
+    rs <-
+      withSchedulerR' $ \scheduler -> do
+        forM_ xs (scheduleWork scheduler . pure)
+        _ <- scheduleWork scheduler $ term scheduler x
+        forM_ ys (scheduleWork scheduler . pure)
+    rs `shouldBe` expected xs x
 
 -- prop_TerminateSeq ::
 --      ((Scheduler IO Int -> IO ()) -> IO (Results Int)) -> [Int] -> Int -> [Int] -> Expectation
@@ -326,7 +344,7 @@ instance Exception Elem
 -- | Check if an element is in the list with an exception
 prop_TraverseConcurrently_ :: Comp -> [Int] -> Int -> Property
 prop_TraverseConcurrently_ comp xs x =
-  concurrentProperty $ do
+  concurrentPropertyIO $ do
     let f i
           | i == x = throwIO $ Elem x
           | otherwise = pure ()
@@ -339,7 +357,7 @@ prop_TraverseConcurrently_ comp xs x =
 -- element is part of that list.
 prop_TraverseConcurrentlyInfinite_ :: Comp -> [Int] -> Int -> Property
 prop_TraverseConcurrentlyInfinite_ comp xs x =
-  comp /= Seq ==> concurrentProperty $ do
+  comp /= Seq ==> concurrentPropertyIO $ do
     let f i
           | i == x = throwIO $ Elem x
           | otherwise = pure ()
@@ -349,38 +367,40 @@ prop_TraverseConcurrentlyInfinite_ comp xs x =
     return (eRes === eRes')
 
 
-prop_WorkerStateExclusive :: Comp -> NonNegative Int -> Expectation
-prop_WorkerStateExclusive comp (NonNegative n) = do
-  state <- initWorkerStates comp (\wid -> (,) wid <$> newIORef (0 :: Int))
-  workerStatesComp state `shouldBe` comp
-  nWorkers <- getCompWorkers comp
-  let scheduleJobs schedulerWS = do
-        replicateM n $
-          scheduleWorkState schedulerWS $ \(wid, ref) -> do
-            counter <- readIORef ref
-            writeIORef ref (counter + 1)
-            pure (wid, counter)
-      gather = map (sortOn snd) . groupBy (\x y -> fst x == fst y) . sortOn fst
-      isMonotonicStartingAt _ [] = True
-      isMonotonicStartingAt k (k':ks) = k == k' && isMonotonicStartingAt (k + 1) ks
-      baseIds = [(wid, -1) | wid <- [0 .. WorkerId nWorkers - 1]]
-  ids <- withSchedulerWS state scheduleJobs
-  length ids `shouldBe` n
-  let gathered = gather (ids ++ baseIds)
-  map (map snd) gathered `shouldSatisfy` all (isMonotonicStartingAt (-1))
-  ids' <- withSchedulerWSR state scheduleJobs
-  length ids' `shouldBe` n
-  let gathered' = gather (baseIds ++ ids ++ F.toList ids')
-  map (map snd) gathered' `shouldSatisfy` all (isMonotonicStartingAt (-1))
-  withSchedulerWS_ state $ \schedulerWS -> do
-    numWorkers (unwrapSchedulerWS schedulerWS) `shouldBe` nWorkers
-    replicateM (10 * n) $
-      scheduleWorkState_ schedulerWS $ \(wid, ref) -> do
-        counter <- readIORef ref
-        when (counter > 0) $ snd (last (gathered' !! getWorkerId wid)) `shouldBe` pred counter
+prop_WorkerStateExclusive :: Comp -> NonNegative Int -> Property
+prop_WorkerStateExclusive comp (NonNegative n) =
+  concurrentExpectation $ do
+    state <- initWorkerStates comp (\wid -> (,) wid <$> newIORef (0 :: Int))
+    workerStatesComp state `shouldBe` comp
+    nWorkers <- getCompWorkers comp
+    let scheduleJobs schedulerWS = do
+          replicateM n $
+            scheduleWorkState schedulerWS $ \(wid, ref) -> do
+              counter <- readIORef ref
+              writeIORef ref (counter + 1)
+              pure (wid, counter)
+        gather = map (sortOn snd) . groupBy (\x y -> fst x == fst y) . sortOn fst
+        isMonotonicStartingAt _ [] = True
+        isMonotonicStartingAt k (k':ks) = k == k' && isMonotonicStartingAt (k + 1) ks
+        baseIds = [(wid, -1) | wid <- [0 .. WorkerId nWorkers - 1]]
+    ids <- withSchedulerWS state scheduleJobs
+    length ids `shouldBe` n
+    let gathered = gather (ids ++ baseIds)
+    map (map snd) gathered `shouldSatisfy` all (isMonotonicStartingAt (-1))
+    ids' <- withSchedulerWSR state scheduleJobs
+    length ids' `shouldBe` n
+    let gathered' = gather (baseIds ++ ids ++ F.toList ids')
+    map (map snd) gathered' `shouldSatisfy` all (isMonotonicStartingAt (-1))
+    withSchedulerWS_ state $ \schedulerWS -> do
+      numWorkers (unwrapSchedulerWS schedulerWS) `shouldBe` nWorkers
+      replicateM (10 * n) $
+        scheduleWorkState_ schedulerWS $ \(wid, ref) -> do
+          counter <- readIORef ref
+          when (counter > 0) $ snd (last (gathered' !! getWorkerId wid)) `shouldBe` pred counter
 
 prop_MutexException :: Comp -> Property
 prop_MutexException comp =
+  concurrentProperty $
   assertExceptionIO (== MutexException) $ do
     state <- initWorkerStates comp (pure . getWorkerId)
     withSchedulerWS_ state $ \schedulerWS ->
@@ -432,55 +452,55 @@ spec = do
       terminate_ trivialScheduler_ `shouldReturn` ()
       terminate trivialScheduler_ () `shouldReturn` ()
       terminateWith trivialScheduler_ () `shouldReturn` ()
-    it "TerminateSeq" $ timed $ prop_Terminate withTrivialScheduler terminate (\xs x -> xs ++ [x])
-    it "TerminateWithSeq" $ timed $ prop_Terminate withTrivialScheduler terminateWith (\_ x -> [x])
-    it "TerminateSeqR" $ timed $ prop_Terminate withTrivialSchedulerR terminate FinishedEarly
-    it "TerminateWithSeqR" $
-      timed $ prop_Terminate withTrivialSchedulerR terminateWith (const FinishedEarlyWith)
+    prop "TerminateSeq" $ prop_Terminate withTrivialScheduler terminate (\xs x -> xs ++ [x])
+    prop "TerminateWithSeq" $ prop_Terminate withTrivialScheduler terminateWith (\_ x -> [x])
+    prop "TerminateSeqR" $ prop_Terminate withTrivialSchedulerR terminate FinishedEarly
+    prop "TerminateWithSeqR" $
+      prop_Terminate withTrivialSchedulerR terminateWith (const FinishedEarlyWith)
   describe "Seq" $ do
-    it "SameList" $ timed $ prop_SameList Seq
-    it "Recursive" $ timed $ prop_Recursive Seq
-    it "Nested" $ timed $ prop_Nested Seq
-    it "Serially" $ timed $ prop_Serially Seq
-    it "TrivialAsSeq_" $ timed prop_TrivialSchedulerSameAsSeq_
-    it "replicateConcurrently == replicateM" $ timed prop_ReplicateM
-    it "replicateConcurrently == replicateWork" $ timed prop_ReplicateWorkSeq
+    prop "SameList" $ prop_SameList Seq
+    prop "Recursive" $ prop_Recursive Seq
+    prop "Nested" $ prop_Nested Seq
+    prop "Serially" $ prop_Serially Seq
+    prop "TrivialAsSeq_" $ prop_TrivialSchedulerSameAsSeq_
+    prop "replicateConcurrently == replicateM" $ prop_ReplicateM
+    prop "replicateConcurrently == replicateWork" $ prop_ReplicateWorkSeq
     it "WorkerIdIsZero" $
       withScheduler Seq (`scheduleWorkId` pure) `shouldReturn` [0]
-    it "TerminateSeq" $ timed $ prop_Terminate (withScheduler Seq) terminate (\xs x -> xs ++ [x])
-    it "TerminateWithSeq" $ timed $ prop_Terminate (withScheduler Seq) terminateWith (\_ x -> [x])
-    it "TerminateSeqR" $ timed $ prop_Terminate (withSchedulerR Seq) terminate FinishedEarly
-    it "TerminateWithSeqR" $
-      timed $ prop_Terminate (withSchedulerR Seq) terminateWith (const FinishedEarlyWith)
+    prop "TerminateSeq" $ prop_Terminate (withScheduler Seq) terminate (\xs x -> xs ++ [x])
+    prop "TerminateWithSeq" $ prop_Terminate (withScheduler Seq) terminateWith (\_ x -> [x])
+    prop "TerminateSeqR" $ prop_Terminate (withSchedulerR Seq) terminate FinishedEarly
+    prop "TerminateWithSeqR" $
+      prop_Terminate (withSchedulerR Seq) terminateWith (const FinishedEarlyWith)
   describe "ParOn" $ do
-    it "SameList" $ timed $ \cs -> prop_SameList (ParOn cs)
-    it "Recursive" $ timed $ \cs -> prop_Recursive (ParOn cs)
-    it "Nested" $ timed $ \cs -> prop_Nested (ParOn cs)
-    it "Serially" $ timed $ \cs -> prop_Serially (ParOn cs)
+    prop "SameList" $ \cs -> prop_SameList (ParOn cs)
+    prop "Recursive" $ \cs -> prop_Recursive (ParOn cs)
+    prop "Nested" $ \cs -> prop_Nested (ParOn cs)
+    prop "Serially" $ \cs -> prop_Serially (ParOn cs)
   describe "Arbitrary Comp" $ do
-    it "Trivial" $ timed prop_SameAsTrivialScheduler
-    it "ArbitraryNested" $ timed prop_ArbitraryCompNested
-    it "AllJobsProcessed" $ timed prop_AllJobsProcessed
-    it "traverseConcurrently == traverse" $ timed prop_Traverse
+    prop "Trivial" $ prop_SameAsTrivialScheduler
+    prop "ArbitraryCompNested" $ prop_ArbitraryCompNested
+    prop "AllJobsProcessed" $ prop_AllJobsProcessed
+    prop "traverseConcurrently == traverse" $ prop_Traverse
   describe "Exceptions" $ do
-    it "CatchDivideByZero" $ timed prop_CatchDivideByZero
-    it "CatchDivideByZeroNested" $ timed prop_CatchDivideByZeroNested
-    it "KillBlockedCoworker" $ timed prop_KillBlockedCoworker
-    it "KillSleepingCoworker" $ timed prop_KillSleepingCoworker
-    it "ExpectAsyncException" $ timed prop_ExpectAsyncException
-    it "WorkerCaughtAsyncException" $ timed prop_WorkerCaughtAsyncException
-    it "AllWorkersDied" $ timed prop_AllWorkersDied
-    it "traverseConcurrently_" $ timed prop_TraverseConcurrently_
-    it "traverseConcurrentlyInfinite_" $ property prop_TraverseConcurrentlyInfinite_
+    prop "CatchDivideByZero" $ prop_CatchDivideByZero
+    prop "CatchDivideByZeroNested" $ prop_CatchDivideByZeroNested
+    prop "KillBlockedCoworker" $ prop_KillBlockedCoworker
+    prop "KillSleepingCoworker" $ prop_KillSleepingCoworker
+    prop "ExpectAsyncException" $ prop_ExpectAsyncException
+    prop "WorkerCaughtAsyncException" $ prop_WorkerCaughtAsyncException
+    prop "AllWorkersDied" $ prop_AllWorkersDied
+    prop "traverseConcurrently_" $ prop_TraverseConcurrently_
+    prop "traverseConcurrentlyInfinite_" $ prop_TraverseConcurrentlyInfinite_
   describe "Premature" $ do
-    it "FinishEarly" $ timed prop_FinishEarly
-    it "FinishEarly_" $ timed prop_FinishEarly_
-    it "FinishEarlyWith" $ timed prop_FinishEarlyWith
-    it "FinishBeforeStarting" $ timed prop_FinishBeforeStarting
-    it "FinishWithBeforeStarting" $ timed prop_FinishWithBeforeStarting
+    prop "FinishEarly" $ prop_FinishEarly
+    prop "FinishEarly_" $ prop_FinishEarly_
+    prop "FinishEarlyWith" $ prop_FinishEarlyWith
+    prop "FinishBeforeStarting" $ prop_FinishBeforeStarting
+    prop "FinishWithBeforeStarting" $ prop_FinishWithBeforeStarting
   describe "WorkerState" $ do
-    it "MutexException" $ timed prop_MutexException
-    it "WorkerStateExclusive" $ timed prop_WorkerStateExclusive
+    prop "MutexException" $ prop_MutexException
+    prop "WorkerStateExclusive" $ prop_WorkerStateExclusive
 
 instance Arbitrary WorkerId where
   arbitrary = WorkerId <$> arbitrary
@@ -492,9 +512,6 @@ instance Arbitrary a => Arbitrary (Results a) where
       , FinishedEarly <$> arbitrary <*> arbitrary
       , FinishedEarlyWith <$> arbitrary
       ]
-
-timed :: Testable prop => prop -> Property
-timed = within 2000000
 
 -- | Assert a synchronous exception
 assertExceptionIO :: (NFData a, Exception exc) =>
