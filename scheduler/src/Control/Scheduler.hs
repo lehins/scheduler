@@ -319,6 +319,10 @@ withTrivialSchedulerR action = do
           \ !r ->
             readMutVar resVar >>= \ !rs -> r <$ writeMutVar finResVar (Just (FinishedEarly rs r))
       , _terminateWith = \ !r -> r <$ writeMutVar finResVar (Just (FinishedEarlyWith r))
+      , _waitForResults =
+          readMutVar finResVar >>= \case
+            Just rs -> pure rs
+            Nothing -> Finished <$> readMutVar resVar
       }
   readMutVar finResVar >>= \case
     Just rs -> pure $ reverseResults rs
@@ -349,6 +353,10 @@ withTrivialSchedulerRIO action = do
               rs <- readIORef resVar
               r <$ writeIORef finResVar (Just (FinishedEarly rs r))
       , _terminateWith = \ !r -> r <$ liftIO (writeIORef finResVar (Just (FinishedEarlyWith r)))
+      , _waitForResults =
+          liftIO (readIORef finResVar) >>= \case
+            Just rs -> pure rs
+            Nothing -> Finished <$> liftIO (readIORef resVar)
       }
   liftIO (readIORef finResVar) >>= \case
     Just rs -> pure $ reverseResults rs
@@ -559,6 +567,16 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
                   void $ tryPutMVar jobsEmptyTrigger Terminating
                   void $ tryPutMVar workDoneMVar $ SchedulerTerminatedEarly (FinishedEarlyWith a)
                   pure a
+          , _waitForResults =
+              do _ <- liftIO $ readMVar jobsEmptyTrigger
+                 liftIO (tryTakeMVar workDoneMVar) >>= \case
+                   Just (SchedulerTerminatedEarly as) ->
+                     as <$ liftIO (tryPutMVar workDoneMVar SchedulerFinished)
+                   Just (SchedulerWorkerException (WorkerException exc)) -> liftIO $ throwIO exc
+                   Just SchedulerFinished -> do
+                     _ <- liftIO $ tryPutMVar workDoneMVar SchedulerFinished
+                     Finished <$> collect jobsQueue
+                   _ -> Finished <$> collect jobsQueue
           }
       onRetire =
         dropCounterOnZero sWorkersCounterRef $
@@ -582,10 +600,10 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
       terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
       doWork tids = do
         _ <- onScheduler scheduler
+        when (comp == Seq) $ runWorker 0 jobsQueue onRetire
         liftIO (readMVar jobsEmptyTrigger) >>= \case
           Continue -> retireWorkersN jobsQueue jobsNumWorkers
           Terminating -> terminateWorkers tids
-        when (comp == Seq) $ runWorker 0 jobsQueue onRetire
         mExc <- liftIO (readMVar workDoneMVar)
         -- \ wait for all worker to finish. If any one of the workers had a problem, then
         -- this MVar will contain an exception

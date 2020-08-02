@@ -85,7 +85,7 @@ data Scheduler m a = Scheduler
   , _scheduleWorkId :: (WorkerId -> m a) -> m ()
   , _terminate      :: a -> m a
   , _terminateWith  :: a -> m a
-  --, _waitForResults :: m Results
+  , _waitForResults :: m (Results a)
   }
 
 -- | This is a wrapper around `Scheduler`, but it also keeps a separate state for each

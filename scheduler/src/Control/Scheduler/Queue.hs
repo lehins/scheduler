@@ -121,6 +121,6 @@ popJQueue (JQueue jQueueRef) = liftIO inner
 readResults :: MonadIO m => JQueue m a -> m [a]
 readResults (JQueue jQueueRef) =
   liftIO $ do
-    resRefs <- qResults <$> readIORef jQueueRef
-    rs <- mapM readIORef resRefs
+    queue <- readIORef jQueueRef
+    rs <- mapM readIORef $ qResults queue
     return $ catMaybes rs
