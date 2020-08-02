@@ -311,50 +311,20 @@ withTrivialSchedulerR :: PrimMonad m => (Scheduler m a -> m b) -> m (Results a)
 withTrivialSchedulerR action = do
   resVar <- newMutVar []
   finResVar <- newMutVar Nothing
-  _ <- action $ Scheduler
-    { _numWorkers = 1
-    , _scheduleWorkId = \f -> do
-        r <- f (WorkerId 0)
-        modifyMutVar' resVar (r:)
-    , _terminate = \r -> do
-        rs <- readMutVar resVar
-        writeMutVar finResVar (Just (FinishedEarly rs r))
-        pure r
-    , _terminateWith = \r -> do
-        writeMutVar finResVar (Just (FinishedEarlyWith r))
-        pure r
-    }
+  _ <-
+    action $
+    Scheduler
+      { _numWorkers = 1
+      , _scheduleWorkId = \f -> f (WorkerId 0) >>= \r -> r `seq` modifyMutVar' resVar (r :)
+      , _terminate =
+          \ !r ->
+            readMutVar resVar >>= \ !rs -> r <$ writeMutVar finResVar (Just (FinishedEarly rs r))
+      , _terminateWith = \ !r -> r <$ writeMutVar finResVar (Just (FinishedEarlyWith r))
+      }
   readMutVar finResVar >>= \case
     Just rs -> pure $ reverseResults rs
     Nothing -> Finished . Prelude.reverse <$> readMutVar resVar
 
-withTrivialSchedulerIO_ :: MonadUnliftIO f => (Scheduler f a -> f b) -> f ()
-withTrivialSchedulerIO_ action = void $ withTrivialSchedulerRIO action
-
-withTrivialSchedulerIO :: MonadUnliftIO f => (Scheduler f a -> f b) -> f [a]
-withTrivialSchedulerIO action = F.toList <$> withTrivialSchedulerRIO action
-
-withTrivialSchedulerRIO :: MonadUnliftIO m => (Scheduler m a -> m b) -> m (Results a)
-withTrivialSchedulerRIO action = do
-  resVar <- liftIO $ newIORef []
-  finResVar <- liftIO $ newIORef Nothing
-  _ <- action $ Scheduler
-    { _numWorkers = 1
-    , _scheduleWorkId = \f -> do
-        r <- f (WorkerId 0)
-        liftIO $ atomicModifyIORefCAS_ resVar (r:)
-    , _terminate = \r -> do
-        rs <- liftIO $ readIORef resVar
-        liftIO $ writeIORef finResVar (Just (FinishedEarly rs r))
-        pure r
-    , _terminateWith = \r -> do
-        liftIO $ writeIORef finResVar (Just (FinishedEarlyWith r))
-        pure r
-    }
-  liftIO (readIORef finResVar) >>= \case
-    Just rs -> pure $ reverseResults rs
-    Nothing -> Finished . Prelude.reverse <$> liftIO (readIORef resVar)
-
 
 withTrivialSchedulerIO_ :: MonadUnliftIO f => (Scheduler f a -> f b) -> f ()
 withTrivialSchedulerIO_ action = void $ withTrivialSchedulerRIO action
@@ -366,19 +336,21 @@ withTrivialSchedulerRIO :: MonadUnliftIO m => (Scheduler m a -> m b) -> m (Resul
 withTrivialSchedulerRIO action = do
   resVar <- liftIO $ newIORef []
   finResVar <- liftIO $ newIORef Nothing
-  _ <- action $ Scheduler
-    { _numWorkers = 1
-    , _scheduleWorkId = \f -> do
-        r <- f (WorkerId 0)
-        r `seq` liftIO (atomicModifyIORefCAS_ resVar (r:))
-    , _terminate = \ !r -> do
-        rs <- liftIO $ readIORef resVar
-        liftIO $ writeIORef finResVar (Just (FinishedEarly rs r))
-        pure r
-    , _terminateWith = \ !r -> do
-        liftIO $ writeIORef finResVar (Just (FinishedEarlyWith r))
-        pure r
-    }
+  _ <-
+    action $
+    Scheduler
+      { _numWorkers = 1
+      , _scheduleWorkId =
+          \f -> do
+            r <- f (WorkerId 0)
+            r `seq` liftIO (atomicModifyIORefCAS_ resVar (r :))
+      , _terminate =
+          \ !r ->
+            liftIO $ do
+              rs <- readIORef resVar
+              r <$ writeIORef finResVar (Just (FinishedEarly rs r))
+      , _terminateWith = \ !r -> r <$ liftIO (writeIORef finResVar (Just (FinishedEarlyWith r)))
+      }
   liftIO (readIORef finResVar) >>= \case
     Just rs -> pure $ reverseResults rs
     Nothing -> Finished . Prelude.reverse <$> liftIO (readIORef resVar)
