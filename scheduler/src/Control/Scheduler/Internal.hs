@@ -14,7 +14,6 @@ module Control.Scheduler.Internal
   , WorkerStates(..)
   , SchedulerWS(..)
   , Jobs(..)
-  , Continue(..)
   , Results(..)
   , SchedulerOutcome(..)
   , WorkerException(..)
@@ -67,13 +66,11 @@ instance Traversable Results where
       FinishedEarly xs x -> FinishedEarly <$> traverse f xs <*> f x
       FinishedEarlyWith x -> FinishedEarlyWith <$> f x
 
-data Continue = Continue | Terminating
-
 data Jobs m a = Jobs
-  { jobsNumWorkers   :: {-# UNPACK #-} !Int
-  , jobsQueue        :: !(JQueue m a)
-  , jobsCountRef     :: !(IORef Int)
-  , jobsEmptyTrigger :: !(MVar Continue)
+  { jobsNumWorkers       :: {-# UNPACK #-} !Int
+  , jobsQueue            :: !(JQueue m a)
+  , jobsCountRef         :: !(IORef Int)
+  , jobsSchedulerOutcome :: !(MVar (SchedulerOutcome a))
   }
 
 -- | Main type for scheduling work. See `Control.Scheduler.withScheduler` or
@@ -85,7 +82,7 @@ data Scheduler m a = Scheduler
   , _scheduleWorkId :: (WorkerId -> m a) -> m ()
   , _terminate      :: a -> m a
   , _terminateWith  :: a -> m a
-  , _waitForResults :: m (Results a)
+  -- , _waitForResults :: m (Results a)
   }
 
 -- | This is a wrapper around `Scheduler`, but it also keeps a separate state for each
@@ -112,7 +109,8 @@ data WorkerStates s = WorkerStates
 
 
 data SchedulerOutcome a
-  = SchedulerFinished
+  = SchedulerIdle
+  | SchedulerFinished
   | SchedulerTerminatedEarly !(Results a)
   | SchedulerWorkerException WorkerException
 
