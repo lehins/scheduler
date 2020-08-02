@@ -67,7 +67,7 @@ instance Traversable Results where
       FinishedEarly xs x -> FinishedEarly <$> traverse f xs <*> f x
       FinishedEarlyWith x -> FinishedEarlyWith <$> f x
 
-data Continue = CanContinue | CanNotContinue
+data Continue = Continue | Terminating
 
 data Jobs m a = Jobs
   { jobsNumWorkers   :: {-# UNPACK #-} !Int
@@ -85,6 +85,7 @@ data Scheduler m a = Scheduler
   , _scheduleWorkId :: (WorkerId -> m a) -> m ()
   , _terminate      :: a -> m a
   , _terminateWith  :: a -> m a
+  --, _waitForResults :: m Results
   }
 
 -- | This is a wrapper around `Scheduler`, but it also keeps a separate state for each

@@ -25,6 +25,7 @@ import Control.Concurrent.MVar
 import Control.Monad (join, void)
 import Control.Monad.IO.Unlift
 import Data.Atomics (atomicModifyIORefCAS)
+import Data.Maybe
 import Data.IORef
 
 
@@ -117,8 +118,9 @@ popJQueue (JQueue jQueueRef) = liftIO inner
 
 
 
-readResults :: MonadIO m => JQueue m a -> m [Maybe a]
+readResults :: MonadIO m => JQueue m a -> m [a]
 readResults (JQueue jQueueRef) =
   liftIO $ do
     resRefs <- qResults <$> readIORef jQueueRef
-    mapM readIORef resRefs
+    rs <- mapM readIORef resRefs
+    return $ catMaybes rs
