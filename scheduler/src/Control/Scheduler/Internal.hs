@@ -14,6 +14,7 @@ module Control.Scheduler.Internal
   , WorkerStates(..)
   , SchedulerWS(..)
   , Jobs(..)
+  , Continue(..)
   , Results(..)
   , SchedulerOutcome(..)
   , WorkerException(..)
@@ -21,6 +22,7 @@ module Control.Scheduler.Internal
   , MutexException(..)
   ) where
 
+import Control.Concurrent.MVar
 import Control.Exception
 import Control.Scheduler.Computation
 import Control.Scheduler.Queue
@@ -65,11 +67,13 @@ instance Traversable Results where
       FinishedEarly xs x -> FinishedEarly <$> traverse f xs <*> f x
       FinishedEarlyWith x -> FinishedEarlyWith <$> f x
 
+data Continue = CanContinue | CanNotContinue
 
 data Jobs m a = Jobs
-  { jobsNumWorkers :: {-# UNPACK #-} !Int
-  , jobsQueue      :: !(JQueue m a)
-  , jobsCountRef   :: !(IORef Int)
+  { jobsNumWorkers   :: {-# UNPACK #-} !Int
+  , jobsQueue        :: !(JQueue m a)
+  , jobsCountRef     :: !(IORef Int)
+  , jobsEmptyTrigger :: !(MVar Continue)
   }
 
 -- | Main type for scheduling work. See `Control.Scheduler.withScheduler` or

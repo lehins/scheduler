@@ -328,6 +328,33 @@ withTrivialSchedulerR action = do
     Just rs -> pure $ reverseResults rs
     Nothing -> Finished . Prelude.reverse <$> readMutVar resVar
 
+withTrivialSchedulerIO_ :: MonadUnliftIO f => (Scheduler f a -> f b) -> f ()
+withTrivialSchedulerIO_ action = void $ withTrivialSchedulerRIO action
+
+withTrivialSchedulerIO :: MonadUnliftIO f => (Scheduler f a -> f b) -> f [a]
+withTrivialSchedulerIO action = F.toList <$> withTrivialSchedulerRIO action
+
+withTrivialSchedulerRIO :: MonadUnliftIO m => (Scheduler m a -> m b) -> m (Results a)
+withTrivialSchedulerRIO action = do
+  resVar <- liftIO $ newIORef []
+  finResVar <- liftIO $ newIORef Nothing
+  _ <- action $ Scheduler
+    { _numWorkers = 1
+    , _scheduleWorkId = \f -> do
+        r <- f (WorkerId 0)
+        liftIO $ atomicModifyIORefCAS_ resVar (r:)
+    , _terminate = \r -> do
+        rs <- liftIO $ readIORef resVar
+        liftIO $ writeIORef finResVar (Just (FinishedEarly rs r))
+        pure r
+    , _terminateWith = \r -> do
+        liftIO $ writeIORef finResVar (Just (FinishedEarlyWith r))
+        pure r
+    }
+  liftIO (readIORef finResVar) >>= \case
+    Just rs -> pure $ reverseResults rs
+    Nothing -> Finished . Prelude.reverse <$> liftIO (readIORef resVar)
+
 
 withTrivialSchedulerIO_ :: MonadUnliftIO f => (Scheduler f a -> f b) -> f ()
 withTrivialSchedulerIO_ action = void $ withTrivialSchedulerRIO action
@@ -414,13 +441,16 @@ scheduleJobs_ = scheduleJobsWith (\job -> pure (Job_ (void . job)))
 scheduleJobsWith ::
      MonadIO m => ((WorkerId -> m b) -> m (Job m a)) -> Jobs m a -> (WorkerId -> m b) -> m ()
 scheduleJobsWith mkJob' jobs action = do
-  liftIO $ atomicModifyIORefCAS_ (jobsCountRef jobs) (+ 1)
+  liftIO $ do
+    prevCount <- atomicModifyIORefCAS (jobsCountRef jobs) (\prev -> (prev + 1, prev))
+    when (prevCount == 0) $ void $ tryTakeMVar $ jobsEmptyTrigger jobs
   job <-
     mkJob' $ \ i -> do
       res <- action i
       res `seq`
         dropCounterOnZero (jobsCountRef jobs) $
-        retireWorkersN (jobsQueue jobs) (jobsNumWorkers jobs)
+          liftIO $ void $ tryPutMVar (jobsEmptyTrigger jobs) CanContinue
+      --   retireWorkersN (jobsQueue jobs) (jobsNumWorkers jobs)
       return res
   pushJQueue (jobsQueue jobs) job
 
@@ -534,7 +564,14 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
   jobsQueue <- newJQueue
   jobsCountRef <- liftIO $ newIORef 0
   workDoneMVar <- liftIO newEmptyMVar
-  let jobs = Jobs {..}
+  jobsEmptyTrigger <- liftIO $ newMVar CanContinue
+  let jobs =
+        Jobs
+          { jobsNumWorkers = jobsNumWorkers
+          , jobsQueue = jobsQueue
+          , jobsCountRef = jobsCountRef
+          , jobsEmptyTrigger = jobsEmptyTrigger
+          }
       scheduler =
         Scheduler
           { _numWorkers = jobsNumWorkers
@@ -543,31 +580,29 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
               \a -> do
                 mas <- collect jobsQueue
                 let as = catMaybes mas
-                liftIO $
+                liftIO $ do
+                  void $ tryPutMVar jobsEmptyTrigger CanNotContinue
                   void $ tryPutMVar workDoneMVar $ SchedulerTerminatedEarly (FinishedEarly as a)
                 pure a
           , _terminateWith =
-              \a -> do
-                liftIO $
+              \a ->
+                liftIO $ do
+                  void $ tryPutMVar jobsEmptyTrigger CanNotContinue
                   void $ tryPutMVar workDoneMVar $ SchedulerTerminatedEarly (FinishedEarlyWith a)
-                pure a
+                  pure a
           }
       onRetire =
         dropCounterOnZero sWorkersCounterRef $
         void $ liftIO (tryPutMVar workDoneMVar SchedulerFinished)
   -- / Wait for the initial jobs to get scheduled before spawining off the workers, otherwise it
   -- would be trickier to identify the beginning and the end of a job pool.
-  _ <- onScheduler scheduler
-  -- / Ensure at least something gets scheduled, so retirement can be triggered
-  jc <- liftIO $ readIORef jobsCountRef
-  when (jc == 0) $ scheduleJobs_ jobs (\_ -> pure ())
   let spawnWorkersWith fork ws =
         withRunInIO $ \run ->
           forM (zip [0 ..] ws) $ \(wId, on) ->
             fork on $ \unmask ->
               catch
                 (unmask $ run $ runWorker wId jobsQueue onRetire)
-                (run . handleWorkerException jobsQueue workDoneMVar jobsNumWorkers)
+                (run . handleWorkerException jobsQueue jobsEmptyTrigger workDoneMVar jobsNumWorkers)
       spawnWorkers =
         case comp of
           Seq -> return []
@@ -577,6 +612,10 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
           ParN _ -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 .. jobsNumWorkers]
       terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
       doWork tids = do
+        _ <- onScheduler scheduler
+        liftIO (readMVar jobsEmptyTrigger) >>= \case
+          CanContinue -> retireWorkersN jobsQueue jobsNumWorkers
+          CanNotContinue -> terminateWorkers tids
         when (comp == Seq) $ runWorker 0 jobsQueue onRetire
         mExc <- liftIO (readMVar workDoneMVar)
         -- \ wait for all worker to finish. If any one of the workers had a problem, then
@@ -608,8 +647,9 @@ reverseResults = \case
 
 -- | Specialized exception handler for the work scheduler.
 handleWorkerException ::
-  MonadIO m => JQueue m a -> MVar (SchedulerOutcome a) -> Int -> SomeException -> m ()
-handleWorkerException jQueue workDoneMVar nWorkers exc =
+  MonadIO m => JQueue m a -> MVar Continue -> MVar (SchedulerOutcome a) -> Int -> SomeException -> m ()
+handleWorkerException jQueue canContinueMVar workDoneMVar nWorkers exc = do
+  _ <- liftIO $ tryPutMVar canContinueMVar CanNotContinue
   case asyncExceptionFromException exc of
     Just WorkerTerminateException -> return ()
       -- \ some co-worker died, we can just move on with our death.
