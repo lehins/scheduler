@@ -273,7 +273,7 @@ prop_FinishBeforeStarting comp =
     res <-
       withScheduler comp $ \scheduler -> do
         void $ terminate scheduler 1
-        scheduleWork scheduler (threadDelay 1000000 >> pure 2)
+        scheduleWork scheduler (threadDelay 10000 >> pure 2)
     pure (res === [1 :: Int])
 
 prop_FinishWithBeforeStarting :: Comp -> Int -> Property

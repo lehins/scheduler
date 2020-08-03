@@ -17,6 +17,7 @@ module Control.Scheduler.Internal
   , Results(..)
   , SchedulerOutcome(..)
   , WorkerException(..)
+  , TerminateEarlyException(..)
   , WorkerTerminateException(..)
   , MutexException(..)
   ) where
@@ -114,6 +115,11 @@ data SchedulerOutcome a
   --  | SchedulerTerminatedEarly !(Results a)
   | SchedulerWorkerException WorkerException
 
+data TerminateEarlyException =
+  TerminateEarlyException
+  deriving (Show)
+
+instance Exception TerminateEarlyException
 
 -- | This exception should normally be never seen in the wild and is for internal use only.
 newtype WorkerException =
