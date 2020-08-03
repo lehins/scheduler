@@ -120,6 +120,17 @@ prop_ReplicateWorkSeq i =
   concurrentProperty . replicateSeq (\ n g -> withScheduler Seq (\s -> replicateWork n s g)) i
 
 
+prop_ManyJobsInChunks :: Comp -> [[Int]] -> Property
+prop_ManyJobsInChunks comp jss =
+  comp /= Seq ==>
+  concurrentExpectation $ do
+    void $ withScheduler comp $ \s ->
+      forM_ jss $ \js -> do
+        mapM_ (scheduleWork s . pure) js
+        rs <- waitForResults s
+        rs `shouldBe` js
+    --xs `shouldBe` []
+
 prop_ArbitraryCompNested :: [(Comp, Int)] -> Property
 prop_ArbitraryCompNested xs =
   concurrentPropertyIO $ do
@@ -501,6 +512,8 @@ spec = do
   describe "WorkerState" $ do
     prop "MutexException" $ prop_MutexException
     prop "WorkerStateExclusive" $ prop_WorkerStateExclusive
+  describe "Restartable" $ do
+    prop "ManyJobsInChunks" prop_ManyJobsInChunks
 
 instance Arbitrary WorkerId where
   arbitrary = WorkerId <$> arbitrary

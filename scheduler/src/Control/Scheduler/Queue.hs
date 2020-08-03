@@ -64,14 +64,13 @@ data Job m a
   | Retire
 
 
-mkJob :: MonadIO m => (WorkerId -> m a) -> m (Job m a)
+mkJob ::
+     MonadIO m
+  => ((a -> m ()) -> WorkerId -> m a)
+  -> m (Job m a)
 mkJob action = do
   resRef <- liftIO $ newIORef Nothing
-  return $!
-    Job resRef $ \ i -> do
-      res <- action i
-      liftIO $ writeIORef resRef $ Just res
-      return $! res
+  return $! Job resRef (action (liftIO . writeIORef resRef . Just))
 
 newtype JQueue m a = JQueue (IORef (Queue m a))
 
@@ -117,10 +116,10 @@ popJQueue (JQueue jQueueRef) = liftIO inner
                 Retire       -> return Nothing)
 
 
-
+-- | Extracts all results, any uncomputed ones are discarded.
 readResults :: MonadIO m => JQueue m a -> m [a]
 readResults (JQueue jQueueRef) =
   liftIO $ do
-    queue <- readIORef jQueueRef
-    rs <- mapM readIORef $ qResults queue
+    results <- atomicModifyIORef' jQueueRef $ \queue -> (queue { qResults = []}, qResults queue)
+    rs <- mapM readIORef results
     return $ catMaybes rs

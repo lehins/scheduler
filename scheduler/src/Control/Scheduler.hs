@@ -248,6 +248,9 @@ terminateWith = _terminateWith
 scheduleWork :: Scheduler m a -> m a -> m ()
 scheduleWork scheduler f = _scheduleWorkId scheduler (const f)
 
+
+-- FIXME: get rid of scheduleJob and decide at `scheduleWork` level if we should use Job or Job_
+-- Type here should be `scheduleWork_ :: Scheduler m a -> m () -> m ()
 -- | Same as `scheduleWork`, but only for a `Scheduler` that doesn't keep the results.
 --
 -- @since 1.1.0
@@ -291,6 +294,7 @@ trivialScheduler_ = Scheduler
   , _scheduleWorkId = \f -> f (WorkerId 0)
   , _terminate = const $ pure ()
   , _terminateWith = const $ pure ()
+  , _waitForResults = pure $ Finished []
   }
 
 
@@ -411,24 +415,26 @@ replicateConcurrently_ comp n f =
 scheduleJobs :: MonadIO m => Jobs m a -> (WorkerId -> m a) -> m ()
 scheduleJobs = scheduleJobsWith mkJob
 
--- | Similarly to `scheduleWork`, but ignores the result of computation, thus having less overhead.
---
--- @since 1.0.0
+-- | Ignores the result of computation, thus having less overhead.
 scheduleJobs_ :: MonadIO m => Jobs m a -> (WorkerId -> m b) -> m ()
-scheduleJobs_ = scheduleJobsWith (\job -> pure (Job_ (void . job)))
+scheduleJobs_ = scheduleJobsWith (\job -> pure (Job_ (void . job (\_ -> pure ()))))
 
 scheduleJobsWith ::
-     MonadIO m => ((WorkerId -> m b) -> m (Job m a)) -> Jobs m a -> (WorkerId -> m b) -> m ()
-scheduleJobsWith mkJob' Jobs {..} action = do
-  liftIO $ atomicModifyIORefCAS_ jobsCountRef (+ 1)
-  -- liftIO $ do
-  --   prevCount <- atomicModifyIORefCAS jobsCountRef (\prev -> (prev + 1, prev))
-  --   when (prevCount == 0) $ void $ tryTakeMVar jobsSchedulerOutcome
+     MonadIO m
+  => (((b -> m ()) -> WorkerId -> m b) -> m (Job m a))
+  -> Jobs m a
+  -> (WorkerId -> m b)
+  -> m ()
+scheduleJobsWith mkJob' jobs action = do
+  liftIO $ do
+    prevCount <- atomicModifyIORefCAS (jobsCountRef jobs) (\prev -> (prev + 1, prev))
+    when (prevCount == 0) $ void $ takeMVar $ jobsEmptyTrigger jobs
   job <-
-    mkJob' $ \ i -> do
+    mkJob' $ \storeResult i -> do
       res <- action i
-      res `seq` dropCounterOnZero jobsCountRef $ retireWorkersN jobsQueue jobsNumWorkers
-        -- liftIO $ void $ tryPutMVar jobsSchedulerOutcome SchedulerIdle
+      res `seq` storeResult res
+      dropCounterOnZero (jobsCountRef jobs) $
+        liftIO $ void $ tryPutMVar (jobsEmptyTrigger jobs) Continue
       return res
   pushJQueue jobsQueue job
 
@@ -566,14 +572,14 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
                   void $
                     tryPutMVar jobsSchedulerOutcome $ SchedulerTerminatedEarly (FinishedEarlyWith a)
                   pure a
-          -- , _waitForResults =
-          --     do rs <-
-          --          liftIO (readMVar jobsSchedulerOutcome) >>= \case
-          --            SchedulerTerminatedEarly rs -> pure rs
-          --            SchedulerWorkerException (WorkerException exc) -> liftIO $ throwIO exc
-          --            SchedulerFinished -> Finished <$> collect jobsQueue
-          --            SchedulerIdle -> pure $ Finished []
-          --        rs <$ liftIO (tryPutMVar jobsSchedulerOutcome SchedulerIdle)
+          , _waitForResults =
+              do rs <-
+                   liftIO (readMVar jobsSchedulerOutcome) >>= \case
+                     SchedulerTerminatedEarly rs -> pure rs
+                     SchedulerWorkerException (WorkerException exc) -> liftIO $ throwIO exc
+                     SchedulerFinished -> Finished <$> collect jobsQueue
+                     SchedulerIdle -> pure $ Finished []
+                 rs <$ liftIO (tryPutMVar jobsSchedulerOutcome SchedulerIdle)
           }
       onRetire =
         dropCounterOnZero sWorkersCounterRef $
@@ -593,11 +599,11 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
                 (run . handleWorkerException jobs)
       spawnWorkers =
         case comp of
-          Seq -> return []
-            -- \ no need to fork threads for a sequential computation
           Par -> spawnWorkersWith forkOnWithUnmask [1 .. jobsNumWorkers]
           ParOn ws -> spawnWorkersWith forkOnWithUnmask ws
           ParN _ -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 .. jobsNumWorkers]
+          Seq -> return []
+            -- \ no need to fork threads for a sequential computation
       terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
       doWork tids = do
         when (comp == Seq) $ runWorker 0 jobsQueue onRetire
