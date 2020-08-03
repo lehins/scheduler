@@ -121,15 +121,15 @@ prop_ReplicateWorkSeq i =
 
 
 prop_ManyJobsInChunks :: Comp -> [[Int]] -> Property
-prop_ManyJobsInChunks comp jss =
-  comp /= Seq ==>
-  concurrentExpectation $ do
-    void $ withScheduler comp $ \s ->
-      forM_ jss $ \js -> do
-        mapM_ (scheduleWork s . pure) js
-        rs <- waitForResults s
-        rs `shouldBe` js
-    --xs `shouldBe` []
+prop_ManyJobsInChunks comp jss = undefined
+  -- comp /= Seq ==>
+  -- concurrentExpectation $ do
+  --   void $ withScheduler comp $ \s ->
+  --     forM_ jss $ \js -> do
+  --       mapM_ (scheduleWork s . pure) js
+  --       rs <- waitForResults s
+  --       rs `shouldBe` js
+  --   --xs `shouldBe` []
 
 prop_ArbitraryCompNested :: [(Comp, Int)] -> Property
 prop_ArbitraryCompNested xs =

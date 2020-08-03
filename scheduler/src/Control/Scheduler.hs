@@ -425,16 +425,15 @@ scheduleJobsWith ::
   -> Jobs m a
   -> (WorkerId -> m b)
   -> m ()
-scheduleJobsWith mkJob' jobs action = do
+scheduleJobsWith mkJob' Jobs {..} action = do
   liftIO $ do
-    prevCount <- atomicModifyIORefCAS (jobsCountRef jobs) (\prev -> (prev + 1, prev))
-    when (prevCount == 0) $ void $ takeMVar $ jobsEmptyTrigger jobs
+    prevCount <- atomicModifyIORefCAS jobsCountRef (\prev -> (prev + 1, prev))
+    when (prevCount == 0) $ void $ takeMVar jobsSchedulerOutcome
   job <-
     mkJob' $ \storeResult i -> do
       res <- action i
       res `seq` storeResult res
-      dropCounterOnZero (jobsCountRef jobs) $
-        liftIO $ void $ tryPutMVar (jobsEmptyTrigger jobs) Continue
+      dropCounterOnZero jobsCountRef $ liftIO $ void $ tryPutMVar jobsSchedulerOutcome SchedulerIdle
       return res
   pushJQueue jobsQueue job
 
@@ -572,24 +571,19 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
                   void $
                     tryPutMVar jobsSchedulerOutcome $ SchedulerTerminatedEarly (FinishedEarlyWith a)
                   pure a
-          , _waitForResults =
-              do rs <-
-                   liftIO (readMVar jobsSchedulerOutcome) >>= \case
-                     SchedulerTerminatedEarly rs -> pure rs
-                     SchedulerWorkerException (WorkerException exc) -> liftIO $ throwIO exc
-                     SchedulerFinished -> Finished <$> collect jobsQueue
-                     SchedulerIdle -> pure $ Finished []
-                 rs <$ liftIO (tryPutMVar jobsSchedulerOutcome SchedulerIdle)
+          , _waitForResults = do
+              rs <- liftIO (takeMVar jobsSchedulerOutcome) >>= \case
+                SchedulerTerminatedEarly rs -> pure rs
+                SchedulerWorkerException (WorkerException exc) -> liftIO $ throwIO exc
+                SchedulerFinished -> Finished <$> collect jobsQueue
+                SchedulerIdle -> pure $ Finished []
+              rs <$ liftIO (putMVar jobsSchedulerOutcome SchedulerIdle)
           }
       onRetire =
         dropCounterOnZero sWorkersCounterRef $
         void $ liftIO (tryPutMVar jobsSchedulerOutcome SchedulerFinished)
   -- / Wait for the initial jobs to get scheduled before spawining off the workers, otherwise it
   -- would be trickier to identify the beginning and the end of a job pool.
-  _ <- onScheduler scheduler
-  jc <- liftIO $ readIORef jobsCountRef
-  when (jc == 0) $ scheduleJobs_ jobs (\_ -> pure ())
-
   let spawnWorkersWith fork ws =
         withRunInIO $ \run ->
           forM (zip [0 ..] ws) $ \(wId, on) ->
@@ -606,6 +600,7 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
             -- \ no need to fork threads for a sequential computation
       terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
       doWork tids = do
+        _ <- onScheduler scheduler
         when (comp == Seq) $ runWorker 0 jobsQueue onRetire
         schedulerOutcome <- liftIO (readMVar jobsSchedulerOutcome)
         -- \ wait for all worker to finish. If any one of the workers had a problem, then
