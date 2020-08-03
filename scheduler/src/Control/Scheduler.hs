@@ -40,6 +40,9 @@ module Control.Scheduler
   , scheduleWorkState
   , scheduleWorkState_
   , replicateWork
+  , waitForResults
+  , waitForResults_
+  , waitForResultsR
   , terminate
   , terminate_
   , terminateWith
@@ -532,6 +535,31 @@ withScheduler_ ::
 withScheduler_ Seq = withTrivialSchedulerIO_
 withScheduler_ comp = void . withSchedulerInternal comp scheduleJobs_ (const (pure [])) (const ())
 
+
+-- | Wait for all scheduled jobs to be done and collect the computed results into a
+-- list. It is a blocking operation, but if there are no jobs in progress it will return
+-- immediately. It is safe to continue using the supplied scheduler after this function
+-- returns, but if any of the jobs resulted in an exception it will be rethrown by this
+-- function, which will also put the scheduler in a terminated state.
+--
+-- @since 1.4.3
+waitForResults :: Functor m => Scheduler m a -> m [a]
+waitForResults Scheduler {_waitForResults} = reverse . resultsToList <$> _waitForResults
+
+-- | Same as `waitForResults` but discard the results
+--
+-- @since 1.4.3
+waitForResults_ :: Monad m => Scheduler m a -> m ()
+waitForResults_ Scheduler {_waitForResults} = void $ _waitForResults
+
+-- | Same as `waitForResults`, but return the results
+--
+-- @since 1.4.3
+waitForResultsR :: Functor m => Scheduler m a -> m (Results a)
+waitForResultsR Scheduler {_waitForResults} = reverseResults <$> _waitForResults
+
+
+
 withSchedulerInternal ::
      MonadUnliftIO m
   => Comp -- ^ Computation strategy
@@ -543,10 +571,11 @@ withSchedulerInternal ::
   -> m c
 withSchedulerInternal comp submitWork collect adjust onScheduler = do
   jobsNumWorkers <- getCompWorkers comp
-  sWorkersCounterRef <- liftIO $ newIORef jobsNumWorkers
   jobsQueue <- newJQueue
   jobsCountRef <- liftIO $ newIORef 0
-  jobsSchedulerOutcome <- liftIO $ newEmptyMVar -- SchedulerIdle
+  jobsSchedulerOutcome <- liftIO $ newMVar SchedulerIdle
+  jobsEmptyTrigger <- liftIO $ newMVar Continue
+  sWorkersCounterRef <- liftIO $ newIORef jobsNumWorkers
   let jobs =
         Jobs
           { jobsNumWorkers = jobsNumWorkers
@@ -614,8 +643,6 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
           -- \ Now we are sure all workers have done their job we can safely read all of the
           -- IORefs with results
   safeBracketOnError spawnWorkers terminateWorkers doWork
-
-
 
 resultsToList :: Results a -> [a]
 resultsToList = \case
