@@ -326,10 +326,10 @@ withTrivialSchedulerR action = do
           \ !r ->
             readMutVar resVar >>= \ !rs -> r <$ writeMutVar finResVar (Just (FinishedEarly rs r))
       , _terminateWith = \ !r -> r <$ writeMutVar finResVar (Just (FinishedEarlyWith r))
-      -- , _waitForResults =
-      --     readMutVar finResVar >>= \case
-      --       Just rs -> pure rs
-      --       Nothing -> Finished <$> readMutVar resVar
+      , _waitForResults =
+          readMutVar finResVar >>= \case
+            Just rs -> pure rs
+            Nothing -> Finished <$> readMutVar resVar
       }
   readMutVar finResVar >>= \case
     Just rs -> pure $ reverseResults rs
@@ -360,10 +360,10 @@ withTrivialSchedulerRIO action = do
               rs <- readIORef resVar
               r <$ writeIORef finResVar (Just (FinishedEarly rs r))
       , _terminateWith = \ !r -> r <$ liftIO (writeIORef finResVar (Just (FinishedEarlyWith r)))
-      -- , _waitForResults =
-      --     liftIO (readIORef finResVar) >>= \case
-      --       Just rs -> pure rs
-      --       Nothing -> Finished <$> liftIO (readIORef resVar)
+      , _waitForResults =
+          liftIO (readIORef finResVar) >>= \case
+            Just rs -> pure rs
+            Nothing -> Finished <$> liftIO (readIORef resVar)
       }
   liftIO (readIORef finResVar) >>= \case
     Just rs -> pure $ reverseResults rs
@@ -432,6 +432,7 @@ scheduleJobsWith mkJob' Jobs {..} action = do
   liftIO $ do
     prevCount <- atomicModifyIORefCAS jobsCountRef (\prev -> (prev + 1, prev))
     when (prevCount == 0) $ void $ takeMVar jobsSchedulerOutcome
+  -- liftIO $ atomicModifyIORefCAS_ jobsCountRef (+ 1)
   job <-
     mkJob' $ \storeResult i -> do
       res <- action i
@@ -459,16 +460,25 @@ dropCounterOnZero counterRef onZero = do
 
 -- | Runs the worker until the job queue is exhausted, at which point it will execute the final task
 -- of retirement and return
-runWorker :: MonadIO m =>
-             WorkerId
-          -> JQueue m a
-          -> m () -- ^ Action to run upon retirement
-          -> m ()
-runWorker wId jQueue onRetire = go
+runWorker ::
+     MonadUnliftIO m
+  => WorkerId
+  -> Jobs m a
+  -> m () -- ^ Action to run upon retirement.
+  -> m ()
+runWorker wId Jobs {jobsQueue, jobsSchedulerOutcome} onRetire = go
   where
     go =
-      popJQueue jQueue >>= \case
-        Just job -> job wId >> go
+      popJQueue jobsQueue >>= \case
+        Just job -> do
+          withRunInIO $ \run ->
+            catch (run (job wId)) $ \exc ->
+              case asyncExceptionFromException exc of
+                Just asyncExc -> throwIO (asyncExc :: SomeAsyncException)
+                Nothing ->
+                  void $
+                  tryPutMVar jobsSchedulerOutcome $ SchedulerWorkerException $ WorkerException exc
+          go
         Nothing -> onRetire
 
 
@@ -550,9 +560,9 @@ waitForResults Scheduler {_waitForResults} = reverse . resultsToList <$> _waitFo
 --
 -- @since 1.4.3
 waitForResults_ :: Monad m => Scheduler m a -> m ()
-waitForResults_ Scheduler {_waitForResults} = void $ _waitForResults
+waitForResults_ Scheduler {_waitForResults} = void _waitForResults
 
--- | Same as `waitForResults`, but return the results
+-- | Same as `waitForResults`, but returns the actual `Results` data type.
 --
 -- @since 1.4.3
 waitForResultsR :: Functor m => Scheduler m a -> m (Results a)
@@ -574,7 +584,6 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
   jobsQueue <- newJQueue
   jobsCountRef <- liftIO $ newIORef 0
   jobsSchedulerOutcome <- liftIO $ newMVar SchedulerIdle
-  jobsEmptyTrigger <- liftIO $ newMVar Continue
   sWorkersCounterRef <- liftIO $ newIORef jobsNumWorkers
   let jobs =
         Jobs
@@ -583,30 +592,35 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
           , jobsCountRef = jobsCountRef
           , jobsSchedulerOutcome = jobsSchedulerOutcome
           }
+      blockForResults =
+        liftIO (readMVar jobsSchedulerOutcome) >>= \case
+          SchedulerWorkerException (WorkerException exc) -> liftIO $ throwIO exc
+          SchedulerIdle -> Finished <$> collect jobsQueue
+          SchedulerFinished -> Finished <$> collect jobsQueue
       scheduler =
         Scheduler
           { _numWorkers = jobsNumWorkers
           , _scheduleWorkId = submitWork jobs
-          , _terminate =
-              \a -> do
-                as <- collect jobsQueue
-                liftIO $ do
-                  void $
-                    tryPutMVar jobsSchedulerOutcome $ SchedulerTerminatedEarly (FinishedEarly as a)
-                pure a
-          , _terminateWith =
-              \a ->
-                liftIO $ do
-                  void $
-                    tryPutMVar jobsSchedulerOutcome $ SchedulerTerminatedEarly (FinishedEarlyWith a)
-                  pure a
-          , _waitForResults = do
-              rs <- liftIO (takeMVar jobsSchedulerOutcome) >>= \case
-                SchedulerTerminatedEarly rs -> pure rs
-                SchedulerWorkerException (WorkerException exc) -> liftIO $ throwIO exc
-                SchedulerFinished -> Finished <$> collect jobsQueue
-                SchedulerIdle -> pure $ Finished []
-              rs <$ liftIO (putMVar jobsSchedulerOutcome SchedulerIdle)
+          , _terminate
+            -- clear the queue
+            -- collect results (will also get rid of results for unfinished jobs)
+             = pure
+              -- \a -> do
+              --   as <- collect jobsQueue
+              --   liftIO $ do
+              --     _ <- tryTakeMVar jobsSchedulerOutcome
+              --     void $
+              --       putMVar jobsSchedulerOutcome $ SchedulerTerminatedEarly (FinishedEarly as a)
+              --   pure a
+          , _terminateWith = pure
+              -- \a -> do
+              --   _ <- collect jobsQueue
+              --   liftIO $ do
+              --     _ <- tryTakeMVar jobsSchedulerOutcome
+              --     void $
+              --       putMVar jobsSchedulerOutcome $ SchedulerTerminatedEarly (FinishedEarlyWith a)
+              --     pure a
+          , _waitForResults = blockForResults
           }
       onRetire =
         dropCounterOnZero sWorkersCounterRef $
@@ -618,8 +632,8 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
           forM (zip [0 ..] ws) $ \(wId, on) ->
             fork on $ \unmask ->
               catch
-                (unmask $ run $ runWorker wId jobsQueue onRetire)
-                (run . handleWorkerException jobs)
+                (unmask $ run $ runWorker wId jobs onRetire)
+                (\exc -> run $ onRetire >> handleWorkerException jobs exc)
       spawnWorkers =
         case comp of
           Par -> spawnWorkersWith forkOnWithUnmask [1 .. jobsNumWorkers]
@@ -630,16 +644,19 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
       terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
       doWork tids = do
         _ <- onScheduler scheduler
-        when (comp == Seq) $ runWorker 0 jobsQueue onRetire
-        schedulerOutcome <- liftIO (readMVar jobsSchedulerOutcome)
+        when (comp == Seq) $ runWorker 0 jobs onRetire
+        schedulerOutcome <- liftIO (takeMVar jobsSchedulerOutcome)
         -- \ wait for all worker to finish. If any one of the workers had a problem, then
         -- this MVar will contain an exception
         case schedulerOutcome of
-          SchedulerTerminatedEarly as -> terminateWorkers tids >> pure (adjust as)
-          SchedulerWorkerException (WorkerException exc) -> liftIO $ throwIO exc
+          SchedulerWorkerException (WorkerException exc) ->
+            terminateWorkers tids >> liftIO (throwIO exc)
           -- \ Here we need to unwrap the legit worker exception and rethrow it, so the main thread
           -- will think like it's his own
-          _ -> adjust . Finished <$> collect jobsQueue
+          SchedulerFinished -> adjust . Finished <$> collect jobsQueue
+          SchedulerIdle -> do
+            retireWorkersN jobsQueue jobsNumWorkers
+            adjust . Finished <$> collect jobsQueue
           -- \ Now we are sure all workers have done their job we can safely read all of the
           -- IORefs with results
   safeBracketOnError spawnWorkers terminateWorkers doWork

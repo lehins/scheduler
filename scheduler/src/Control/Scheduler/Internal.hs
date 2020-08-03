@@ -111,7 +111,7 @@ data WorkerStates s = WorkerStates
 data SchedulerOutcome a
   = SchedulerIdle
   | SchedulerFinished
-  | SchedulerTerminatedEarly !(Results a)
+  --  | SchedulerTerminatedEarly !(Results a)
   | SchedulerWorkerException WorkerException
 
 

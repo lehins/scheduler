@@ -35,7 +35,7 @@ import Data.Semigroup
 
 
 concurrentProperty :: Testable prop => prop -> Property
-concurrentProperty = within 1000000
+concurrentProperty = within 2000000
 
 concurrentExpectation :: Expectation -> Property
 concurrentExpectation = concurrentProperty
@@ -121,15 +121,15 @@ prop_ReplicateWorkSeq i =
 
 
 prop_ManyJobsInChunks :: Comp -> [[Int]] -> Property
-prop_ManyJobsInChunks comp jss = undefined
-  -- comp /= Seq ==>
-  -- concurrentExpectation $ do
-  --   void $ withScheduler comp $ \s ->
-  --     forM_ jss $ \js -> do
-  --       mapM_ (scheduleWork s . pure) js
-  --       rs <- waitForResults s
-  --       rs `shouldBe` js
-  --   --xs `shouldBe` []
+prop_ManyJobsInChunks comp jss =
+  comp /= Seq ==>
+  concurrentExpectation $ do
+    void $ withScheduler comp $ \s ->
+      forM_ jss $ \js -> do
+        mapM_ (scheduleWork s . pure) js
+        rs <- waitForResults s
+        rs `shouldBe` js
+    --xs `shouldBe` []
 
 prop_ArbitraryCompNested :: [(Comp, Int)] -> Property
 prop_ArbitraryCompNested xs =
@@ -273,7 +273,7 @@ prop_FinishBeforeStarting comp =
     res <-
       withScheduler comp $ \scheduler -> do
         void $ terminate scheduler 1
-        scheduleWork scheduler (threadDelay 10000 >> pure 2)
+        scheduleWork scheduler (threadDelay 1000000 >> pure 2)
     pure (res === [1 :: Int])
 
 prop_FinishWithBeforeStarting :: Comp -> Int -> Property
@@ -473,9 +473,9 @@ spec = do
     prop "Recursive" $ prop_Recursive Seq
     prop "Nested" $ prop_Nested Seq
     prop "Serially" $ prop_Serially Seq
-    prop "TrivialAsSeq_" $ prop_TrivialSchedulerSameAsSeq_
-    prop "replicateConcurrently == replicateM" $ prop_ReplicateM
-    prop "replicateConcurrently == replicateWork" $ prop_ReplicateWorkSeq
+    prop "TrivialAsSeq_" prop_TrivialSchedulerSameAsSeq_
+    prop "replicateConcurrently == replicateM" prop_ReplicateM
+    prop "replicateConcurrently == replicateWork" prop_ReplicateWorkSeq
     it "WorkerIdIsZero" $
       withScheduler Seq (`scheduleWorkId` pure) `shouldReturn` [0]
     prop "TerminateSeq" $ prop_Terminate (withScheduler Seq) terminate (\xs x -> xs ++ [x])
@@ -489,29 +489,29 @@ spec = do
     prop "Nested" $ \cs -> prop_Nested (ParOn cs)
     prop "Serially" $ \cs -> prop_Serially (ParOn cs)
   describe "Arbitrary Comp" $ do
-    prop "Trivial" $ prop_SameAsTrivialScheduler
-    prop "ArbitraryCompNested" $ prop_ArbitraryCompNested
-    prop "AllJobsProcessed" $ prop_AllJobsProcessed
-    prop "traverseConcurrently == traverse" $ prop_Traverse
+    prop "Trivial" prop_SameAsTrivialScheduler
+    prop "ArbitraryCompNested" prop_ArbitraryCompNested
+    prop "AllJobsProcessed" prop_AllJobsProcessed
+    prop "traverseConcurrently == traverse" prop_Traverse
   describe "Exceptions" $ do
-    prop "CatchDivideByZero" $ prop_CatchDivideByZero
-    prop "CatchDivideByZeroNested" $ prop_CatchDivideByZeroNested
-    prop "KillBlockedCoworker" $ prop_KillBlockedCoworker
-    prop "KillSleepingCoworker" $ prop_KillSleepingCoworker
-    prop "ExpectAsyncException" $ prop_ExpectAsyncException
-    prop "WorkerCaughtAsyncException" $ prop_WorkerCaughtAsyncException
-    prop "AllWorkersDied" $ prop_AllWorkersDied
-    prop "traverseConcurrently_" $ prop_TraverseConcurrently_
-    prop "traverseConcurrentlyInfinite_" $ prop_TraverseConcurrentlyInfinite_
+    prop "CatchDivideByZero" prop_CatchDivideByZero
+    prop "CatchDivideByZeroNested" prop_CatchDivideByZeroNested
+    prop "KillBlockedCoworker" prop_KillBlockedCoworker
+    prop "KillSleepingCoworker" prop_KillSleepingCoworker
+    prop "ExpectAsyncException" prop_ExpectAsyncException
+    prop "WorkerCaughtAsyncException" prop_WorkerCaughtAsyncException
+    prop "AllWorkersDied" prop_AllWorkersDied
+    prop "traverseConcurrently_" prop_TraverseConcurrently_
+    prop "traverseConcurrentlyInfinite_" prop_TraverseConcurrentlyInfinite_
   describe "Premature" $ do
-    prop "FinishEarly" $ prop_FinishEarly
-    prop "FinishEarly_" $ prop_FinishEarly_
-    prop "FinishEarlyWith" $ prop_FinishEarlyWith
-    prop "FinishBeforeStarting" $ prop_FinishBeforeStarting
-    prop "FinishWithBeforeStarting" $ prop_FinishWithBeforeStarting
+    prop "FinishEarly" prop_FinishEarly
+    prop "FinishEarly_" prop_FinishEarly_
+    prop "FinishEarlyWith" prop_FinishEarlyWith
+    prop "FinishBeforeStarting" prop_FinishBeforeStarting
+    prop "FinishWithBeforeStarting" prop_FinishWithBeforeStarting
   describe "WorkerState" $ do
-    prop "MutexException" $ prop_MutexException
-    prop "WorkerStateExclusive" $ prop_WorkerStateExclusive
+    prop "MutexException" prop_MutexException
+    prop "WorkerStateExclusive" prop_WorkerStateExclusive
   describe "Restartable" $ do
     prop "ManyJobsInChunks" prop_ManyJobsInChunks
 
