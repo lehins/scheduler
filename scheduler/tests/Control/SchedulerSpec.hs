@@ -44,13 +44,15 @@ concurrentPropertyIO :: IO Property -> Property
 concurrentPropertyIO = concurrentProperty . monadicIO . run
 
 instance Arbitrary Comp where
+  arbitrary = frequency [(20, pure Seq), (80, getNonSeq <$> arbitrary)]
+
+newtype NonSeq = NonSeq {getNonSeq :: Comp }
+  deriving (Show, Eq)
+
+instance Arbitrary NonSeq where
   arbitrary =
-    frequency
-      [ (20, pure Seq)
-      , (10, pure Par)
-      , (35, ParOn <$> arbitrary)
-      , (35, ParN . getSmall <$> arbitrary)
-      ]
+    NonSeq <$>
+    frequency [(10, pure Par), (35, ParOn <$> arbitrary), (35, ParN . getSmall <$> arbitrary)]
 
 prop_SameList :: Comp -> [Int] -> Property
 prop_SameList comp xs =
@@ -120,9 +122,8 @@ prop_ReplicateWorkSeq i =
   concurrentProperty . replicateSeq (\ n g -> withScheduler Seq (\s -> replicateWork n s g)) i
 
 
-prop_ManyJobsInChunks :: Comp -> [[Int]] -> Property
-prop_ManyJobsInChunks comp jss =
-  comp /= Seq ==>
+prop_ManyJobsInChunks :: NonSeq -> [[Int]] -> Property
+prop_ManyJobsInChunks (NonSeq comp) jss =
   concurrentExpectation $ do
     void $ withScheduler comp $ \s ->
       forM_ jss $ \js -> do
@@ -237,9 +238,9 @@ prop_AllWorkersDied comp1 comp (Positive n) =
          (withScheduler_ comp $ \scheduler ->
             replicateM_ n (scheduleWork scheduler (myThreadId >>= killThread))))
 
-prop_FinishEarly_ :: Comp -> Property
-prop_FinishEarly_ comp =
-  comp /= Seq ==> concurrentPropertyIO $ do
+prop_FinishEarly_ :: NonSeq -> Property
+prop_FinishEarly_ (NonSeq comp) =
+  concurrentPropertyIO $ do
     ref <- newIORef True
     withScheduler_ comp $ \scheduler ->
       scheduleWork_
@@ -366,9 +367,9 @@ prop_TraverseConcurrently_ comp xs x =
 -- TODO: fix the infinite property for single worker schedulers
 -- | Check if an element is in the list with an exception, where we know that list is infinite and
 -- element is part of that list.
-prop_TraverseConcurrentlyInfinite_ :: Comp -> [Int] -> Int -> Property
-prop_TraverseConcurrentlyInfinite_ comp xs x =
-  comp /= Seq ==> concurrentPropertyIO $ do
+prop_TraverseConcurrentlyInfinite_ :: NonSeq -> [Int] -> Int -> Property
+prop_TraverseConcurrentlyInfinite_ (NonSeq comp) xs x =
+  concurrentPropertyIO $ do
     let f i
           | i == x = throwIO $ Elem x
           | otherwise = pure ()

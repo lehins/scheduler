@@ -84,6 +84,7 @@ data Scheduler m a = Scheduler
   , _terminate      :: a -> m a
   , _terminateWith  :: a -> m a
   , _waitForResults :: m (Results a)
+  , _earlyResults   :: m (Maybe (Results a))
   }
 
 -- | This is a wrapper around `Scheduler`, but it also keeps a separate state for each

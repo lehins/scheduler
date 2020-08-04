@@ -298,6 +298,7 @@ trivialScheduler_ = Scheduler
   , _terminate = const $ pure ()
   , _terminateWith = const $ pure ()
   , _waitForResults = pure $ Finished []
+  , _earlyResults = pure Nothing
   }
 
 
@@ -330,6 +331,7 @@ withTrivialSchedulerR action = do
           readMutVar finResVar >>= \case
             Just rs -> pure rs
             Nothing -> Finished <$> readMutVar resVar
+      , _earlyResults = readMutVar finResVar
       }
   readMutVar finResVar >>= \case
     Just rs -> pure $ reverseResults rs
@@ -364,6 +366,7 @@ withTrivialSchedulerRIO action = do
           liftIO (readIORef finResVar) >>= \case
             Just rs -> pure rs
             Nothing -> Finished <$> liftIO (readIORef resVar)
+      , _earlyResults = liftIO (readIORef finResVar)
       }
   liftIO (readIORef finResVar) >>= \case
     Just rs -> pure $ reverseResults rs
@@ -556,22 +559,18 @@ waitForResultsR Scheduler {_waitForResults} = reverseResults <$> _waitForResults
 
 
 
-withSchedulerInternal ::
-     MonadUnliftIO m
-  => Comp -- ^ Computation strategy
-  -> (Jobs m a -> (WorkerId -> m a) -> m ()) -- ^ How to schedule work
-  -> (JQueue m a -> m [a]) -- ^ How to collect results
-  -> (Results a -> c) -- ^ Adjust results in some way
-  -> (Scheduler m a -> m b)
-     -- ^ Action that will be scheduling all the work.
-  -> m c
-withSchedulerInternal comp submitWork collect adjust onScheduler = do
+initScheduler ::
+     MonadIO m
+  => Comp
+  -> (Jobs m a -> (WorkerId -> m a) -> m ())
+  -> (JQueue m a -> m [a])
+  -> m (Jobs m a, Scheduler m a)
+initScheduler comp submitWork collect = do
   jobsNumWorkers <- getCompWorkers comp
   jobsQueue <- newJQueue
   jobsCountRef <- liftIO $ newIORef 0
   jobsSchedulerStatus <- liftIO $ newMVar SchedulerIdle
-  earlyTerminationResultRef <-
-    liftIO $ newIORef (error "Impossible: uninitialized early termination value")
+  earlyTerminationResultRef <- liftIO $ newIORef Nothing
   let jobs =
         Jobs
           { jobsNumWorkers = jobsNumWorkers
@@ -591,15 +590,30 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
               \a -> do
                 as <- collect jobsQueue
                 liftIO $ do
-                  writeIORef earlyTerminationResultRef $ FinishedEarly as a
+                  writeIORef earlyTerminationResultRef $ Just $ FinishedEarly as a
                   throwIO TerminateEarlyException
           , _terminateWith =
               \a ->
                 liftIO $ do
-                  writeIORef earlyTerminationResultRef $ FinishedEarlyWith a
+                  writeIORef earlyTerminationResultRef $ Just $ FinishedEarlyWith a
                   throwIO TerminateEarlyException
           , _waitForResults = blockForResults
+          , _earlyResults = liftIO (readIORef earlyTerminationResultRef)
           }
+  pure (jobs, scheduler)
+
+
+withSchedulerInternal ::
+     MonadUnliftIO m
+  => Comp -- ^ Computation strategy
+  -> (Jobs m a -> (WorkerId -> m a) -> m ()) -- ^ How to schedule work
+  -> (JQueue m a -> m [a]) -- ^ How to collect results
+  -> (Results a -> c) -- ^ Adjust results in some way
+  -> (Scheduler m a -> m b)
+     -- ^ Action that will be scheduling all the work.
+  -> m c
+withSchedulerInternal comp submitWork collect adjust onScheduler = do
+  (jobs@Jobs{..}, scheduler) <- initScheduler comp submitWork collect
   -- / Wait for the initial jobs to get scheduled before spawining off the workers, otherwise it
   -- would be trickier to identify the beginning and the end of a job pool.
   let spawnWorkersWith fork ws =
@@ -617,12 +631,17 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
           Seq -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 :: Int]
             -- \ sequential computation is suboptimal when used in this way.
       terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
+      readEarlyTermination =
+        _earlyResults scheduler >>= \case
+          Nothing -> error "Impossible: uninitialized early termination value"
+          Just rs -> pure $ adjust rs
       doWork tids =
         withRunInIO $ \run ->
           try (run (onScheduler scheduler)) >>= \case
-            Left TerminateEarlyException -> do
-              run $ terminateWorkers tids
-              adjust <$> readIORef earlyTerminationResultRef
+            Left TerminateEarlyException ->
+              run $ do
+                terminateWorkers tids
+                readEarlyTermination
             Right _ -> do
               schedulerStatus <- liftIO (takeMVar jobsSchedulerStatus)
               -- \ wait for all worker to finish. If any one of the workers had a problem, then
@@ -631,14 +650,14 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
                 SchedulerWorkerException (WorkerException exc) -> do
                   run $ terminateWorkers tids
                   case fromException exc of
-                    Just TerminateEarlyException ->
-                      adjust <$> readIORef earlyTerminationResultRef
+                    Just TerminateEarlyException -> run readEarlyTermination
                     Nothing -> throwIO exc
                 -- \ Here we need to unwrap the legit worker exception and rethrow it, so
                 -- the main thread will think like it's his own
-                SchedulerIdle -> run $ do
-                  terminateWorkers tids
-                  adjust . Finished <$> collect jobsQueue
+                SchedulerIdle ->
+                  run $ do
+                    terminateWorkers tids
+                    adjust . Finished <$> collect jobsQueue
                 -- \ Now we are sure all workers have done their job we can safely read
                 -- all of the IORefs with results
   safeBracketOnError spawnWorkers terminateWorkers doWork
