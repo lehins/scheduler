@@ -431,19 +431,16 @@ scheduleJobsWith ::
 scheduleJobsWith mkJob' Jobs {..} action = do
   liftIO $ do
     prevCount <- atomicModifyIORefCAS jobsCountRef (\prev -> (prev + 1, prev))
-    when (prevCount == 0) $ void $ takeMVar jobsSchedulerOutcome
+    when (prevCount == 0) $ void $ takeMVar jobsSchedulerStatus
   -- liftIO $ atomicModifyIORefCAS_ jobsCountRef (+ 1)
   job <-
     mkJob' $ \storeResult i -> do
       res <- action i
       res `seq` storeResult res
-      dropCounterOnZero jobsCountRef $ liftIO $ void $ tryPutMVar jobsSchedulerOutcome SchedulerIdle
+      dropCounterOnZero jobsCountRef $ liftIO $ void $ tryPutMVar jobsSchedulerStatus SchedulerIdle
       return res
   pushJQueue jobsQueue job
 
--- | Helper function to place required number of @Retire@ instructions on the job queue.
-retireWorkersN :: MonadIO m => JQueue m a -> Int -> m ()
-retireWorkersN jobsQueue n = traverse_ (pushJQueue jobsQueue) $ replicate n Retire
 
 -- | Decrease a counter by one and perform an action when it drops down to zero.
 dropCounterOnZero :: MonadIO m => IORef Int -> m () -> m ()
@@ -458,28 +455,18 @@ dropCounterOnZero counterRef onZero = do
   when (jc == 0) onZero
 
 
--- | Runs the worker until the job queue is exhausted, at which point it will execute the final task
--- of retirement and return
-runWorker ::
-     MonadUnliftIO m
-  => WorkerId
-  -> Jobs m a
-  -> m () -- ^ Action to run upon retirement.
-  -> m ()
-runWorker wId Jobs {jobsQueue, jobsSchedulerOutcome} onRetire = go
+-- | Runs the worker until it is terminated with an `WorkerTerminateException` or killed
+-- by some other asynchronous exception.
+runWorker :: MonadUnliftIO m => WorkerId -> Jobs m a -> m ()
+runWorker wId Jobs {jobsQueue, jobsSchedulerStatus} = go
   where
-    go =
-      popJQueue jobsQueue >>= \case
-        Just job -> do
-          withRunInIO $ \run ->
-            catch (run (job wId)) $ \exc ->
-              case asyncExceptionFromException exc of
-                Just asyncExc -> throwIO (asyncExc :: SomeAsyncException)
-                Nothing ->
-                  void $
-                  tryPutMVar jobsSchedulerOutcome $ SchedulerWorkerException $ WorkerException exc
-          go
-        Nothing -> onRetire
+    go = do
+      job <- popJQueue jobsQueue
+      withRunInIO $ \run ->
+        catch (run (job wId)) $ \exc -> do
+          unless (isSyncException exc) $ throwIO exc
+          void $ tryPutMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
+      go
 
 
 -- | Initialize a scheduler and submit jobs that will be computed sequentially or in parallelel,
@@ -583,8 +570,7 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
   jobsNumWorkers <- getCompWorkers comp
   jobsQueue <- newJQueue
   jobsCountRef <- liftIO $ newIORef 0
-  jobsSchedulerOutcome <- liftIO $ newMVar SchedulerIdle
-  sWorkersCounterRef <- liftIO $ newIORef jobsNumWorkers
+  jobsSchedulerStatus <- liftIO $ newMVar SchedulerIdle
   earlyTerminationResultRef <-
     liftIO $ newIORef (error "Impossible: uninitialized early termination value")
   let jobs =
@@ -592,13 +578,12 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
           { jobsNumWorkers = jobsNumWorkers
           , jobsQueue = jobsQueue
           , jobsCountRef = jobsCountRef
-          , jobsSchedulerOutcome = jobsSchedulerOutcome
+          , jobsSchedulerStatus = jobsSchedulerStatus
           }
       blockForResults =
-        liftIO (readMVar jobsSchedulerOutcome) >>= \case
+        liftIO (readMVar jobsSchedulerStatus) >>= \case
           SchedulerWorkerException (WorkerException exc) -> liftIO $ throwIO exc
           SchedulerIdle -> Finished <$> collect jobsQueue
-          SchedulerFinished -> Finished <$> collect jobsQueue
       scheduler =
         Scheduler
           { _numWorkers = jobsNumWorkers
@@ -616,9 +601,6 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
                   throwIO TerminateEarlyException
           , _waitForResults = blockForResults
           }
-      onRetire =
-        dropCounterOnZero sWorkersCounterRef $
-        void $ liftIO (tryPutMVar jobsSchedulerOutcome SchedulerFinished)
   -- / Wait for the initial jobs to get scheduled before spawining off the workers, otherwise it
   -- would be trickier to identify the beginning and the end of a job pool.
   let spawnWorkersWith fork ws =
@@ -626,8 +608,8 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
           forM (zip [0 ..] ws) $ \(wId, on) ->
             fork on $ \unmask ->
               catch
-                (unmask $ run $ runWorker wId jobs onRetire)
-                (\exc -> run $ onRetire >> handleWorkerException jobs exc)
+                (unmask $ run $ runWorker wId jobs)
+                (\exc -> run $ handleWorkerException jobs exc)
       spawnWorkers =
         case comp of
           Par -> spawnWorkersWith forkOnWithUnmask [1 .. jobsNumWorkers]
@@ -643,25 +625,24 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
               run $ terminateWorkers tids
               adjust <$> readIORef earlyTerminationResultRef
             Right _ -> do
-              when (comp == Seq) $ run $ runWorker 0 jobs onRetire
-              schedulerOutcome <- liftIO (takeMVar jobsSchedulerOutcome)
+              when (comp == Seq) $ run $ runWorker 0 jobs
+              schedulerStatus <- liftIO (takeMVar jobsSchedulerStatus)
             -- \ wait for all worker to finish. If any one of the workers had a problem, then
             -- this MVar will contain an exception
-              case schedulerOutcome of
+              case schedulerStatus of
                 SchedulerWorkerException (WorkerException exc) -> do
                   run $ terminateWorkers tids
                   case fromException exc of
                     Just TerminateEarlyException ->
                       adjust <$> readIORef earlyTerminationResultRef
                     Nothing -> throwIO exc
-              -- \ Here we need to unwrap the legit worker exception and rethrow it, so the main thread
-              -- will think like it's his own
-                SchedulerFinished -> adjust . Finished <$> run (collect jobsQueue)
+                -- \ Here we need to unwrap the legit worker exception and rethrow it, so
+                -- the main thread will think like it's his own
                 SchedulerIdle -> run $ do
-                  retireWorkersN jobsQueue jobsNumWorkers
+                  terminateWorkers tids
                   adjust . Finished <$> collect jobsQueue
-              -- \ Now we are sure all workers have done their job we can safely read all of the
-              -- IORefs with results
+                -- \ Now we are sure all workers have done their job we can safely read
+                -- all of the IORefs with results
   safeBracketOnError spawnWorkers terminateWorkers doWork
 
 resultsToList :: Results a -> [a]
@@ -680,30 +661,38 @@ reverseResults = \case
 
 -- | Specialized exception handler for the work scheduler.
 handleWorkerException :: MonadIO m => Jobs m a -> SomeException -> m ()
-handleWorkerException Jobs {jobsQueue, jobsSchedulerOutcome, jobsNumWorkers} exc = do
+handleWorkerException Jobs {jobsSchedulerStatus} exc = do
   case asyncExceptionFromException exc of
     Just WorkerTerminateException -> return ()
-      -- \ some co-worker died, we can just move on with our death.
+      -- \ in a process of worker termination
       --  --------------------------------------------------------
-    _ -> do
-      _ <- liftIO $ tryPutMVar jobsSchedulerOutcome $ SchedulerWorkerException $ WorkerException exc
-      -- \ Main thread must know how we died
-      --  -----------------------------------
-      -- / Do the co-worker cleanup
-      retireWorkersN jobsQueue (jobsNumWorkers - 1)
+    _ ->
+      liftIO $ do
+        void $ tryPutMVar jobsSchedulerStatus $ SchedulerWorkerException $ WorkerException exc
+        unless (isSyncException exc) $ throwIO exc
+        -- \ Main thread must know how we died and if it was async exception, rethrow it.
 
 
--- Copy from unliftio:
+-- Copies from unliftio
+
 safeBracketOnError :: MonadUnliftIO m => m a -> (a -> m b) -> (a -> m c) -> m c
-safeBracketOnError before after thing = withRunInIO $ \run -> mask $ \restore -> do
-  x <- run before
-  res1 <- try $ restore $ run $ thing x
-  case res1 of
-    Left (e1 :: SomeException) -> do
-      _ :: Either SomeException b <-
-        try $ uninterruptibleMask_ $ run $ after x
-      throwIO e1
-    Right y -> return y
+safeBracketOnError before after thing =
+  withRunInIO $ \run ->
+    mask $ \restore -> do
+      x <- run before
+      res1 <- try $ restore $ run $ thing x
+      case res1 of
+        Left (e1 :: SomeException) -> do
+          _ :: Either SomeException b <- try $ uninterruptibleMask_ $ run $ after x
+          throwIO e1
+        Right y -> return y
+
+isSyncException :: Exception e => e -> Bool
+isSyncException exc =
+  case fromException (toException exc) of
+    Just (SomeAsyncException _) -> False
+    Nothing -> True
+
 
 {- $exceptions
 

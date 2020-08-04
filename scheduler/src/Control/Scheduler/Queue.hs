@@ -11,7 +11,7 @@
 --
 module Control.Scheduler.Queue
   (  -- * Job queue
-    Job(Retire, Job_)
+    Job(Job_)
   , mkJob
   , JQueue
   , WorkerId(..)
@@ -61,7 +61,6 @@ popQueue queue =
 data Job m a
   = Job !(IORef (Maybe a)) (WorkerId -> m a)
   | Job_ (WorkerId -> m ())
-  | Retire
 
 
 mkJob ::
@@ -100,7 +99,7 @@ pushJQueue (JQueue jQueueRef) job =
            , liftIO $ putMVar qBaton ()))
 
 
-popJQueue :: MonadIO m => JQueue m a -> m (Maybe (WorkerId -> m ()))
+popJQueue :: MonadIO m => JQueue m a -> m (WorkerId -> m ())
 popJQueue (JQueue jQueueRef) = liftIO inner
   where
     inner =
@@ -111,9 +110,8 @@ popJQueue (JQueue jQueueRef) = liftIO inner
           Just (job, newQueue) ->
             ( newQueue
             , case job of
-                Job _ action -> return $ Just (void . action)
-                Job_ action_ -> return $ Just action_
-                Retire       -> return Nothing)
+                Job _ action -> return (void . action)
+                Job_ action_ -> return action_)
 
 
 -- | Extracts all results, any uncomputed ones are discarded.

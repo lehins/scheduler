@@ -15,7 +15,7 @@ module Control.Scheduler.Internal
   , SchedulerWS(..)
   , Jobs(..)
   , Results(..)
-  , SchedulerOutcome(..)
+  , SchedulerStatus(..)
   , WorkerException(..)
   , TerminateEarlyException(..)
   , WorkerTerminateException(..)
@@ -29,7 +29,7 @@ import Control.Scheduler.Queue
 import Data.IORef
 import Data.Primitive.SmallArray
 
--- | Computed outcome of scheduled jobs.
+-- | Computed results of scheduled jobs.
 --
 -- @since 1.4.2
 data Results a
@@ -68,10 +68,10 @@ instance Traversable Results where
       FinishedEarlyWith x -> FinishedEarlyWith <$> f x
 
 data Jobs m a = Jobs
-  { jobsNumWorkers       :: {-# UNPACK #-} !Int
-  , jobsQueue            :: !(JQueue m a)
-  , jobsCountRef         :: !(IORef Int)
-  , jobsSchedulerOutcome :: !(MVar (SchedulerOutcome a))
+  { jobsNumWorkers      :: {-# UNPACK #-} !Int
+  , jobsQueue           :: !(JQueue m a)
+  , jobsCountRef        :: !(IORef Int)
+  , jobsSchedulerStatus :: !(MVar SchedulerStatus)
   }
 
 -- | Main type for scheduling work. See `Control.Scheduler.withScheduler` or
@@ -109,10 +109,8 @@ data WorkerStates s = WorkerStates
   }
 
 
-data SchedulerOutcome a
+data SchedulerStatus
   = SchedulerIdle
-  | SchedulerFinished
-  --  | SchedulerTerminatedEarly !(Results a)
   | SchedulerWorkerException WorkerException
 
 data TerminateEarlyException =
