@@ -80,6 +80,7 @@ import Data.IORef
 import Data.Primitive.SmallArray
 import Data.Primitive.MutVar
 import Data.Traversable
+import System.IO.Unsafe
 
 -- | Get the underlying `Scheduler`, which cannot access `WorkerStates`.
 --
@@ -616,22 +617,7 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
   (jobs@Jobs{..}, scheduler) <- initScheduler comp submitWork collect
   -- / Wait for the initial jobs to get scheduled before spawining off the workers, otherwise it
   -- would be trickier to identify the beginning and the end of a job pool.
-  let spawnWorkersWith fork ws =
-        withRunInIO $ \run ->
-          forM (zip [0 ..] ws) $ \(wId, on) ->
-            fork on $ \unmask ->
-              catch
-                (unmask $ run $ runWorker wId jobs)
-                (\exc -> run $ handleWorkerException jobs exc)
-      spawnWorkers =
-        case comp of
-          Par -> spawnWorkersWith forkOnWithUnmask [1 .. jobsNumWorkers]
-          ParOn ws -> spawnWorkersWith forkOnWithUnmask ws
-          ParN _ -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 .. jobsNumWorkers]
-          Seq -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 :: Int]
-            -- \ sequential computation is suboptimal when used in this way.
-      terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
-      readEarlyTermination =
+  let readEarlyTermination =
         _earlyResults scheduler >>= \case
           Nothing -> error "Impossible: uninitialized early termination value"
           Just rs -> pure $ adjust rs
@@ -660,7 +646,49 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
                     adjust . Finished <$> collect jobsQueue
                 -- \ Now we are sure all workers have done their job we can safely read
                 -- all of the IORefs with results
-  safeBracketOnError spawnWorkers terminateWorkers doWork
+  safeBracketOnError (spawnWorkers jobs comp) terminateWorkers doWork
+
+
+spawnWorkers :: MonadUnliftIO m => Jobs m a -> Comp -> m [ThreadId]
+spawnWorkers jobs@Jobs {jobsNumWorkers} =
+  \case
+    Par -> spawnWorkersWith forkOnWithUnmask [1 .. jobsNumWorkers]
+    ParOn ws -> spawnWorkersWith forkOnWithUnmask ws
+    ParN _ -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 .. jobsNumWorkers]
+    Seq -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 :: Int]
+    -- \ sequential computation is suboptimal when used in this way.
+  where
+    spawnWorkersWith fork ws =
+      withRunInIO $ \run ->
+        forM (zip [0 ..] ws) $ \(wId, on) ->
+          fork on $ \unmask ->
+            catch (unmask $ run $ runWorker wId jobs) (\exc -> run $ handleWorkerException jobs exc)
+
+terminateWorkers :: MonadIO m => [ThreadId] -> m ()
+terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
+
+
+newtype GlobalScheduler = GlobalScheduler (IORef (Scheduler IO ()))
+
+newGlobalScheduler :: MonadIO m => m GlobalScheduler
+newGlobalScheduler =
+  liftIO $ do
+    (jobs, scheduler) <- initScheduler Par scheduleJobs_ (const (pure []))
+    ref <- newIORef scheduler
+    GlobalScheduler ref <$
+      safeBracketOnError
+        (spawnWorkers jobs Par)
+        terminateWorkers
+        (mkWeakIORef ref . terminateWorkers)
+
+waitForGS :: MonadIO m => GlobalScheduler -> m ()
+waitForGS (GlobalScheduler ref) = liftIO $ readIORef ref >>= waitForResults_
+
+scheduleWorkGS :: MonadUnliftIO m => GlobalScheduler -> m a -> m ()
+scheduleWorkGS (GlobalScheduler ref) action =
+  withRunInIO $ \run -> do
+    scheduler <- readIORef ref
+    scheduleWork_ scheduler (run (void action))
 
 resultsToList :: Results a -> [a]
 resultsToList = \case
