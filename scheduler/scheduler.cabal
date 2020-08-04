@@ -17,9 +17,11 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Control.Scheduler
+                     , Control.Scheduler.Global
                      , Control.Scheduler.Internal
                      , Control.Scheduler.Computation
                      , Control.Scheduler.Queue
+                     , Control.Scheduler.Types
   build-depends:       base           >= 4.9 && < 5
                      , atomic-primops
                      , deepseq

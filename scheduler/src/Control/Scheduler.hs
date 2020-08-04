@@ -1,14 +1,8 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 -- |
 -- Module      : Control.Scheduler
--- Copyright   : (c) Alexey Kuleshevich 2018-2019
+-- Copyright   : (c) Alexey Kuleshevich 2018-2020
 -- License     : BSD3
 -- Maintainer  : Alexey Kuleshevich <lehins@yandex.ru>
 -- Stability   : experimental
@@ -66,21 +60,17 @@ module Control.Scheduler
   , MutexException(..)
   ) where
 
-import Control.Concurrent
-import Control.Exception
 import Control.Monad
 import Control.Monad.IO.Unlift
 import Control.Monad.Primitive (PrimMonad)
 import Control.Scheduler.Computation
 import Control.Scheduler.Internal
+import Control.Scheduler.Types
 import Control.Scheduler.Queue
-import Data.Atomics (atomicModifyIORefCAS, atomicModifyIORefCAS_)
-import qualified Data.Foldable as F (foldl', traverse_, toList)
-import Data.IORef
+import qualified Data.Foldable as F (traverse_, toList)
 import Data.Primitive.SmallArray
-import Data.Primitive.MutVar
 import Data.Traversable
-import System.IO.Unsafe
+
 
 -- | Get the underlying `Scheduler`, which cannot access `WorkerStates`.
 --
@@ -89,49 +79,11 @@ unwrapSchedulerWS :: SchedulerWS s m a -> Scheduler m a
 unwrapSchedulerWS = _getScheduler
 
 
--- | Initialize a separate state for each worker.
---
--- @since 1.4.0
-initWorkerStates :: MonadIO m => Comp -> (WorkerId -> m s) -> m (WorkerStates s)
-initWorkerStates comp initState = do
-  nWorkers <- getCompWorkers comp
-  arr <- liftIO $ newSmallArray nWorkers (error "Uninitialized")
-  let go i = when (i < nWorkers) $ do
-        state <- initState (WorkerId i)
-        liftIO $ writeSmallArray arr i state
-        go (i + 1)
-  go 0
-  workerStates <- liftIO $ unsafeFreezeSmallArray arr
-  mutex <- liftIO $ newIORef False
-  pure
-    WorkerStates
-      {_workerStatesComp = comp, _workerStatesArray = workerStates, _workerStatesMutex = mutex}
-
 -- | Get the computation strategy the states where initialized with.
 --
 -- @since 1.4.0
 workerStatesComp :: WorkerStates s -> Comp
 workerStatesComp = _workerStatesComp
-
-withSchedulerWSInternal ::
-     MonadUnliftIO m
-  => (Comp -> (Scheduler m a -> t) -> m b)
-  -> WorkerStates s
-  -> (SchedulerWS s m a -> t)
-  -> m b
-withSchedulerWSInternal withScheduler' states action =
-  withRunInIO $ \run -> bracket lockState unlockState (run . runSchedulerWS)
-  where
-    mutex = _workerStatesMutex states
-    lockState = atomicModifyIORef' mutex ((,) True)
-    unlockState wasLocked
-      | wasLocked = pure ()
-      | otherwise = writeIORef mutex False
-    runSchedulerWS isLocked
-      | isLocked = liftIO $ throwIO MutexException
-      | otherwise =
-        withScheduler' (_workerStatesComp states) $ \scheduler ->
-          action (SchedulerWS states scheduler)
 
 
 -- | Run a scheduler with stateful workers. Throws `MutexException` if an attempt is made
@@ -288,20 +240,6 @@ replicateWork !n scheduler f = go n
 terminate_ :: Scheduler m () -> m ()
 terminate_ = (`_terminateWith` ())
 
--- | The most basic scheduler that simply runs the task instead of scheduling it. Early termination
--- requests are bluntly ignored.
---
--- @since 1.1.0
-trivialScheduler_ :: Applicative f => Scheduler f ()
-trivialScheduler_ = Scheduler
-  { _numWorkers = 1
-  , _scheduleWorkId = \f -> f (WorkerId 0)
-  , _terminate = const $ pure ()
-  , _terminateWith = const $ pure ()
-  , _waitForResults = pure $ Finished []
-  , _earlyResults = pure Nothing
-  }
-
 
 -- | This trivial scheduler will behave in the same way as `withScheduler` with `Seq`
 -- computation strategy, except it is restricted to `PrimMonad`, instead of `MonadUnliftIO`.
@@ -310,34 +248,6 @@ trivialScheduler_ = Scheduler
 withTrivialScheduler :: PrimMonad m => (Scheduler m a -> m b) -> m [a]
 withTrivialScheduler action = F.toList <$> withTrivialSchedulerR action
 
--- | This trivial scheduler will behave in a similar way as `withSchedulerR` with `Seq`
--- computation strategy, except it is restricted to `PrimMonad`, instead of
--- `MonadUnliftIO` and the work isn't scheduled, but rather computed immediately.
---
--- @since 1.4.2
-withTrivialSchedulerR :: PrimMonad m => (Scheduler m a -> m b) -> m (Results a)
-withTrivialSchedulerR action = do
-  resVar <- newMutVar []
-  finResVar <- newMutVar Nothing
-  _ <-
-    action $
-    Scheduler
-      { _numWorkers = 1
-      , _scheduleWorkId = \f -> f (WorkerId 0) >>= \r -> r `seq` modifyMutVar' resVar (r :)
-      , _terminate =
-          \ !r ->
-            readMutVar resVar >>= \ !rs -> r <$ writeMutVar finResVar (Just (FinishedEarly rs r))
-      , _terminateWith = \ !r -> r <$ writeMutVar finResVar (Just (FinishedEarlyWith r))
-      , _waitForResults =
-          readMutVar finResVar >>= \case
-            Just rs -> pure rs
-            Nothing -> Finished <$> readMutVar resVar
-      , _earlyResults = readMutVar finResVar
-      }
-  readMutVar finResVar >>= \case
-    Just rs -> pure $ reverseResults rs
-    Nothing -> Finished . Prelude.reverse <$> readMutVar resVar
-
 
 withTrivialSchedulerIO_ :: MonadUnliftIO f => (Scheduler f a -> f b) -> f ()
 withTrivialSchedulerIO_ action = void $ withTrivialSchedulerRIO action
@@ -345,40 +255,6 @@ withTrivialSchedulerIO_ action = void $ withTrivialSchedulerRIO action
 withTrivialSchedulerIO :: MonadUnliftIO f => (Scheduler f a -> f b) -> f [a]
 withTrivialSchedulerIO action = F.toList <$> withTrivialSchedulerRIO action
 
-withTrivialSchedulerRIO :: MonadUnliftIO m => (Scheduler m a -> m b) -> m (Results a)
-withTrivialSchedulerRIO action = do
-  resVar <- liftIO $ newIORef []
-  finResVar <- liftIO $ newIORef Nothing
-  _ <-
-    action $
-    Scheduler
-      { _numWorkers = 1
-      , _scheduleWorkId =
-          \f -> do
-            r <- f (WorkerId 0)
-            r `seq` liftIO (atomicModifyIORefCAS_ resVar (r :))
-      , _terminate =
-          \ !r ->
-            liftIO $ do
-              rs <- readIORef resVar
-              r <$ writeIORef finResVar (Just (FinishedEarly rs r))
-      , _terminateWith = \ !r -> r <$ liftIO (writeIORef finResVar (Just (FinishedEarlyWith r)))
-      , _waitForResults =
-          liftIO (readIORef finResVar) >>= \case
-            Just rs -> pure rs
-            Nothing -> Finished <$> liftIO (readIORef resVar)
-      , _earlyResults = liftIO (readIORef finResVar)
-      }
-  liftIO (readIORef finResVar) >>= \case
-    Just rs -> pure $ reverseResults rs
-    Nothing -> Finished . Prelude.reverse <$> liftIO (readIORef resVar)
-
-
--- | This is generally a faster way to traverse while ignoring the result rather than using `mapM_`.
---
--- @since 1.0.0
-traverse_ :: (Applicative f, Foldable t) => (a -> f ()) -> t a -> f ()
-traverse_ f = F.foldl' (\c a -> c *> f a) (pure ())
 
 -- | Map an action over each element of the `Traversable` @t@ acccording to the supplied computation
 -- strategy.
@@ -419,57 +295,6 @@ replicateConcurrently_ comp n f =
   withScheduler_ comp $ \s -> scheduleWork s $ replicateM_ n (scheduleWork s $ void f)
 
 
-scheduleJobs :: MonadIO m => Jobs m a -> (WorkerId -> m a) -> m ()
-scheduleJobs = scheduleJobsWith mkJob
-
--- | Ignores the result of computation, thus having less overhead.
-scheduleJobs_ :: MonadIO m => Jobs m a -> (WorkerId -> m b) -> m ()
-scheduleJobs_ = scheduleJobsWith (\job -> pure (Job_ (void . job (\_ -> pure ()))))
-
-scheduleJobsWith ::
-     MonadIO m
-  => (((b -> m ()) -> WorkerId -> m b) -> m (Job m a))
-  -> Jobs m a
-  -> (WorkerId -> m b)
-  -> m ()
-scheduleJobsWith mkJob' Jobs {..} action = do
-  liftIO $ do
-    prevCount <- atomicModifyIORefCAS jobsCountRef (\prev -> (prev + 1, prev))
-    when (prevCount == 0) $ void $ takeMVar jobsSchedulerStatus
-  job <-
-    mkJob' $ \storeResult i -> do
-      res <- action i
-      res `seq` storeResult res
-      dropCounterOnZero jobsCountRef $ liftIO $ void $ tryPutMVar jobsSchedulerStatus SchedulerIdle
-      return res
-  pushJQueue jobsQueue job
-
-
--- | Decrease a counter by one and perform an action when it drops down to zero.
-dropCounterOnZero :: MonadIO m => IORef Int -> m () -> m ()
-dropCounterOnZero counterRef onZero = do
-  jc <-
-    liftIO $
-    atomicModifyIORefCAS
-      counterRef
-      (\ !i' ->
-         let !i = i' - 1
-          in (i, i))
-  when (jc == 0) onZero
-
-
--- | Runs the worker until it is terminated with an `WorkerTerminateException` or killed
--- by some other asynchronous exception.
-runWorker :: MonadUnliftIO m => WorkerId -> Jobs m a -> m ()
-runWorker wId Jobs {jobsQueue, jobsSchedulerStatus} = go
-  where
-    go = do
-      job <- popJQueue jobsQueue
-      withRunInIO $ \run ->
-        catch (run (job wId)) $ \exc -> do
-          unless (isSyncException exc) $ throwIO exc
-          void $ tryPutMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
-      go
 
 
 -- | Initialize a scheduler and submit jobs that will be computed sequentially or in parallelel,
@@ -559,190 +384,20 @@ waitForResultsR :: Functor m => Scheduler m a -> m (Results a)
 waitForResultsR Scheduler {_waitForResults} = reverseResults <$> _waitForResults
 
 
+{- $setup
 
-initScheduler ::
-     MonadIO m
-  => Comp
-  -> (Jobs m a -> (WorkerId -> m a) -> m ())
-  -> (JQueue m a -> m [a])
-  -> m (Jobs m a, Scheduler m a)
-initScheduler comp submitWork collect = do
-  jobsNumWorkers <- getCompWorkers comp
-  jobsQueue <- newJQueue
-  jobsCountRef <- liftIO $ newIORef 0
-  jobsSchedulerStatus <- liftIO $ newMVar SchedulerIdle
-  earlyTerminationResultRef <- liftIO $ newIORef Nothing
-  let jobs =
-        Jobs
-          { jobsNumWorkers = jobsNumWorkers
-          , jobsQueue = jobsQueue
-          , jobsCountRef = jobsCountRef
-          , jobsSchedulerStatus = jobsSchedulerStatus
-          }
-      blockForResults =
-        liftIO (readMVar jobsSchedulerStatus) >>= \case
-          SchedulerWorkerException (WorkerException exc) -> liftIO $ throwIO exc
-          SchedulerIdle -> Finished <$> collect jobsQueue
-      scheduler =
-        Scheduler
-          { _numWorkers = jobsNumWorkers
-          , _scheduleWorkId = submitWork jobs
-          , _terminate =
-              \a -> do
-                as <- collect jobsQueue
-                liftIO $ do
-                  writeIORef earlyTerminationResultRef $ Just $ FinishedEarly as a
-                  throwIO TerminateEarlyException
-          , _terminateWith =
-              \a ->
-                liftIO $ do
-                  writeIORef earlyTerminationResultRef $ Just $ FinishedEarlyWith a
-                  throwIO TerminateEarlyException
-          , _waitForResults = blockForResults
-          , _earlyResults = liftIO (readIORef earlyTerminationResultRef)
-          }
-  pure (jobs, scheduler)
+>>> import Control.Exception
+>>> import Control.Concurrent
+>>> import Control.Concurrent.MVar
 
-
-withSchedulerInternal ::
-     MonadUnliftIO m
-  => Comp -- ^ Computation strategy
-  -> (Jobs m a -> (WorkerId -> m a) -> m ()) -- ^ How to schedule work
-  -> (JQueue m a -> m [a]) -- ^ How to collect results
-  -> (Results a -> c) -- ^ Adjust results in some way
-  -> (Scheduler m a -> m b)
-     -- ^ Action that will be scheduling all the work.
-  -> m c
-withSchedulerInternal comp submitWork collect adjust onScheduler = do
-  (jobs@Jobs{..}, scheduler) <- initScheduler comp submitWork collect
-  -- / Wait for the initial jobs to get scheduled before spawining off the workers, otherwise it
-  -- would be trickier to identify the beginning and the end of a job pool.
-  let readEarlyTermination =
-        _earlyResults scheduler >>= \case
-          Nothing -> error "Impossible: uninitialized early termination value"
-          Just rs -> pure $ adjust rs
-      doWork tids =
-        withRunInIO $ \run ->
-          try (run (onScheduler scheduler)) >>= \case
-            Left TerminateEarlyException ->
-              run $ do
-                terminateWorkers tids
-                readEarlyTermination
-            Right _ -> do
-              schedulerStatus <- liftIO (takeMVar jobsSchedulerStatus)
-              -- \ wait for all worker to finish. If any one of the workers had a problem, then
-              -- this MVar will contain an exception
-              case schedulerStatus of
-                SchedulerWorkerException (WorkerException exc) -> do
-                  run $ terminateWorkers tids
-                  case fromException exc of
-                    Just TerminateEarlyException -> run readEarlyTermination
-                    Nothing -> throwIO exc
-                -- \ Here we need to unwrap the legit worker exception and rethrow it, so
-                -- the main thread will think like it's his own
-                SchedulerIdle ->
-                  run $ do
-                    terminateWorkers tids
-                    adjust . Finished <$> collect jobsQueue
-                -- \ Now we are sure all workers have done their job we can safely read
-                -- all of the IORefs with results
-  safeBracketOnError (spawnWorkers jobs comp) terminateWorkers doWork
-
-
-spawnWorkers :: MonadUnliftIO m => Jobs m a -> Comp -> m [ThreadId]
-spawnWorkers jobs@Jobs {jobsNumWorkers} =
-  \case
-    Par -> spawnWorkersWith forkOnWithUnmask [1 .. jobsNumWorkers]
-    ParOn ws -> spawnWorkersWith forkOnWithUnmask ws
-    ParN _ -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 .. jobsNumWorkers]
-    Seq -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 :: Int]
-    -- \ sequential computation is suboptimal when used in this way.
-  where
-    spawnWorkersWith fork ws =
-      withRunInIO $ \run ->
-        forM (zip [0 ..] ws) $ \(wId, on) ->
-          fork on $ \unmask ->
-            catch (unmask $ run $ runWorker wId jobs) (\exc -> run $ handleWorkerException jobs exc)
-
-terminateWorkers :: MonadIO m => [ThreadId] -> m ()
-terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
-
-
-newtype GlobalScheduler = GlobalScheduler (IORef (Scheduler IO ()))
-
-newGlobalScheduler :: MonadIO m => m GlobalScheduler
-newGlobalScheduler =
-  liftIO $ do
-    (jobs, scheduler) <- initScheduler Par scheduleJobs_ (const (pure []))
-    ref <- newIORef scheduler
-    GlobalScheduler ref <$
-      safeBracketOnError
-        (spawnWorkers jobs Par)
-        terminateWorkers
-        (mkWeakIORef ref . terminateWorkers)
-
-waitForGS :: MonadIO m => GlobalScheduler -> m ()
-waitForGS (GlobalScheduler ref) = liftIO $ readIORef ref >>= waitForResults_
-
-scheduleWorkGS :: MonadUnliftIO m => GlobalScheduler -> m a -> m ()
-scheduleWorkGS (GlobalScheduler ref) action =
-  withRunInIO $ \run -> do
-    scheduler <- readIORef ref
-    scheduleWork_ scheduler (run (void action))
-
-resultsToList :: Results a -> [a]
-resultsToList = \case
-  Finished rs -> rs
-  FinishedEarly rs r -> r:rs
-  FinishedEarlyWith r -> [r]
-
-
-reverseResults :: Results a -> Results a
-reverseResults = \case
-  Finished rs -> Finished (reverse rs)
-  FinishedEarly rs r -> FinishedEarly (reverse rs) r
-  res -> res
-
-
--- | Specialized exception handler for the work scheduler.
-handleWorkerException :: MonadIO m => Jobs m a -> SomeException -> m ()
-handleWorkerException Jobs {jobsSchedulerStatus} exc = do
-  case asyncExceptionFromException exc of
-    Just WorkerTerminateException -> return ()
-      -- \ in a process of worker termination
-      --  --------------------------------------------------------
-    _ ->
-      liftIO $ do
-        void $ tryPutMVar jobsSchedulerStatus $ SchedulerWorkerException $ WorkerException exc
-        unless (isSyncException exc) $ throwIO exc
-        -- \ Main thread must know how we died and if it was async exception, rethrow it.
-
-
--- Copies from unliftio
-
-safeBracketOnError :: MonadUnliftIO m => m a -> (a -> m b) -> (a -> m c) -> m c
-safeBracketOnError before after thing =
-  withRunInIO $ \run ->
-    mask $ \restore -> do
-      x <- run before
-      res1 <- try $ restore $ run $ thing x
-      case res1 of
-        Left (e1 :: SomeException) -> do
-          _ :: Either SomeException b <- try $ uninterruptibleMask_ $ run $ after x
-          throwIO e1
-        Right y -> return y
-
-isSyncException :: Exception e => e -> Bool
-isSyncException exc =
-  case fromException (toException exc) of
-    Just (SomeAsyncException _) -> False
-    Nothing -> True
+-}
 
 
 {- $exceptions
 
 If any one of the workers dies with an exception, even if that exceptions is asynchronous, it will be
 re-thrown in the scheduling thread.
+
 
 >>> let didAWorkerDie = handleJust asyncExceptionFromException (return . (== ThreadKilled)) . fmap or
 >>> :t didAWorkerDie
