@@ -63,10 +63,7 @@ data Job m a
   | Job_ (WorkerId -> m ())
 
 
-mkJob ::
-     MonadIO m
-  => ((a -> m ()) -> WorkerId -> m a)
-  -> m (Job m a)
+mkJob :: MonadIO m => ((a -> m ()) -> WorkerId -> m a) -> m (Job m a)
 mkJob action = do
   resRef <- liftIO $ newIORef Nothing
   return $! Job resRef (action (liftIO . writeIORef resRef . Just))
@@ -114,7 +111,7 @@ popJQueue (JQueue jQueueRef) = liftIO inner
                 Job_ action_ -> return action_)
 
 
--- | Extracts all results, any uncomputed ones are discarded.
+-- | Extracts all results available up to now, the uncomputed ones are discarded.
 readResults :: MonadIO m => JQueue m a -> m [a]
 readResults (JQueue jQueueRef) =
   liftIO $ do

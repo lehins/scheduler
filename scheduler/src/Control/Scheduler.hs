@@ -432,7 +432,6 @@ scheduleJobsWith mkJob' Jobs {..} action = do
   liftIO $ do
     prevCount <- atomicModifyIORefCAS jobsCountRef (\prev -> (prev + 1, prev))
     when (prevCount == 0) $ void $ takeMVar jobsSchedulerStatus
-  -- liftIO $ atomicModifyIORefCAS_ jobsCountRef (+ 1)
   job <-
     mkJob' $ \storeResult i -> do
       res <- action i
@@ -615,8 +614,8 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
           Par -> spawnWorkersWith forkOnWithUnmask [1 .. jobsNumWorkers]
           ParOn ws -> spawnWorkersWith forkOnWithUnmask ws
           ParN _ -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 .. jobsNumWorkers]
-          Seq -> return []
-            -- \ no need to fork threads for a sequential computation
+          Seq -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 :: Int]
+            -- \ sequential computation is suboptimal when used in this way.
       terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
       doWork tids =
         withRunInIO $ \run ->
@@ -625,10 +624,9 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
               run $ terminateWorkers tids
               adjust <$> readIORef earlyTerminationResultRef
             Right _ -> do
-              when (comp == Seq) $ run $ runWorker 0 jobs
               schedulerStatus <- liftIO (takeMVar jobsSchedulerStatus)
-            -- \ wait for all worker to finish. If any one of the workers had a problem, then
-            -- this MVar will contain an exception
+              -- \ wait for all worker to finish. If any one of the workers had a problem, then
+              -- this MVar will contain an exception
               case schedulerStatus of
                 SchedulerWorkerException (WorkerException exc) -> do
                   run $ terminateWorkers tids
