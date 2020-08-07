@@ -117,38 +117,10 @@ withTrivialSchedulerR action = do
   resVar <- newMutVar []
   batchVar <- newMutVar $ BatchId 0
   finResVar <- newMutVar Nothing
+  batchEarlyVar <- newMutVar Nothing
   let bumpBatchId = atomicModifyMutVar' batchVar (\(BatchId x) -> (BatchId (x + 1), ()))
-  _ <-
-    action $
-    Scheduler
-      { _numWorkers = 1
-      , _scheduleWorkId = \f -> f (WorkerId 0) >>= \r -> r `seq` modifyMutVar' resVar (r :)
-      , _terminate =
-          \ !early -> do
-            finishEarly <-
-              case early of
-                Early r -> FinishedEarly <$> readMutVar resVar <*> pure r
-                EarlyWith r -> pure $ FinishedEarlyWith r
-            unEarly early <$ bumpBatchId <* writeMutVar finResVar (Just finishEarly)
-      , _waitForBatch =
-          bumpBatchId *> readMutVar finResVar >>= \case
-            Just rs -> pure rs
-            Nothing -> Finished <$> readMutVar resVar
-      , _earlyResults = readMutVar finResVar
-      , _currentBatchId = readMutVar batchVar
-      , _batchEarly = pure Nothing
-      , _cancelCurrentBatch = const bumpBatchId
-      }
-  readMutVar finResVar >>= \case
-    Just rs -> pure $ reverseResults rs
-    Nothing -> Finished . Prelude.reverse <$> readMutVar resVar
-
-withTrivialSchedulerRIO :: MonadUnliftIO m => (Scheduler m a -> m b) -> m (Results a)
-withTrivialSchedulerRIO action = do
-  resVar <- liftIO $ newIORef []
-  batchVar <- liftIO $ newIORef $ BatchId 0
-  finResVar <- liftIO $ newIORef Nothing
-  let bumpBatchId = atomicModifyIORefCAS_ (coerce batchVar) (+ (1 :: Int))
+      takeBatchEarly = atomicModifyMutVar' batchEarlyVar $ \mEarly -> (Nothing, mEarly)
+      takeResults = atomicModifyMutVar' resVar $ \res -> ([], res)
   _ <-
     action $
     Scheduler
@@ -156,29 +128,65 @@ withTrivialSchedulerRIO action = do
       , _scheduleWorkId =
           \f -> do
             r <- f (WorkerId 0)
-            r `seq` liftIO (bumpBatchId >> atomicModifyIORefCAS_ resVar (r :))
+            r `seq` bumpBatchId >> atomicModifyMutVar' resVar (\rs -> (r : rs, ()))
+      , _terminate =
+          \early -> do
+            finishEarly <- collectResults (Just early) takeResults
+            unEarly early <$ bumpBatchId <* writeMutVar finResVar (Just finishEarly)
+      , _waitForBatch =
+          do bumpBatchId
+             mEarly <- takeBatchEarly
+             collectResults mEarly . pure =<< takeResults
+      , _earlyResults = readMutVar finResVar
+      , _currentBatchId = readMutVar batchVar
+      , _batchEarly = takeBatchEarly
+      , _cancelCurrentBatch = \early -> writeMutVar batchEarlyVar (Just early) >> bumpBatchId
+      }
+  readMutVar finResVar >>= \case
+    Just rs -> pure $ reverseResults rs
+    Nothing -> do
+      mEarly <- takeBatchEarly
+      reverseResults <$> collectResults mEarly takeResults
+
+withTrivialSchedulerRIO :: MonadUnliftIO m => (Scheduler m a -> m b) -> m (Results a)
+
+withTrivialSchedulerRIO action = do
+  resRef <- liftIO $ newIORef []
+  batchRef <- liftIO $ newIORef $ BatchId 0
+  finResRef <- liftIO $ newIORef Nothing
+  batchEarlyRef <- liftIO $ newIORef Nothing
+  let bumpBatchId = atomicModifyIORefCAS_ (coerce batchRef) (+ (1 :: Int))
+      takeBatchEarly = atomicModifyIORefCAS batchEarlyRef $ \mEarly -> (Nothing, mEarly)
+      takeResults = atomicModifyIORefCAS resRef $ \res -> ([], res)
+  _ <-
+    action $
+    Scheduler
+      { _numWorkers = 1
+      , _scheduleWorkId =
+          \f -> do
+            r <- f (WorkerId 0)
+            r `seq` liftIO (bumpBatchId >> atomicModifyIORefCAS_ resRef (r :))
       , _terminate =
           \ !early ->
             liftIO $ do
-              finishEarly <-
-                case early of
-                  Early r -> FinishedEarly <$> readIORef resVar <*> pure r
-                  EarlyWith r -> pure $ FinishedEarlyWith r
-              unEarly early <$ bumpBatchId <* writeIORef finResVar (Just finishEarly)
+              finishEarly <- collectResults (Just early) takeResults
+              unEarly early <$ bumpBatchId <* writeIORef finResRef (Just finishEarly)
       , _waitForBatch =
           liftIO $ do
             bumpBatchId
-            readIORef finResVar >>= \case
-              Just rs -> pure rs
-              Nothing -> Finished <$> readIORef resVar
-      , _earlyResults = liftIO (readIORef finResVar)
-      , _currentBatchId = liftIO (readIORef batchVar)
-      , _batchEarly = pure Nothing
-      , _cancelCurrentBatch = const $ liftIO bumpBatchId
+            mEarly <- takeBatchEarly
+            collectResults mEarly . pure =<< takeResults
+      , _earlyResults = liftIO (readIORef finResRef)
+      , _currentBatchId = liftIO (readIORef batchRef)
+      , _batchEarly = liftIO takeBatchEarly
+      , _cancelCurrentBatch =
+          \early -> liftIO (writeIORef batchEarlyRef (Just early) >> bumpBatchId)
       }
-  liftIO (readIORef finResVar) >>= \case
+  liftIO (readIORef finResRef) >>= \case
     Just rs -> pure $ reverseResults rs
-    Nothing -> Finished . Prelude.reverse <$> liftIO (readIORef resVar)
+    Nothing -> liftIO $ do
+      mEarly <- takeBatchEarly
+      reverseResults <$> collectResults mEarly takeResults
 
 
 -- | This is generally a faster way to traverse while ignoring the result rather than using `mapM_`.

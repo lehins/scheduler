@@ -123,8 +123,8 @@ prop_ReplicateWorkSeq i =
   concurrentProperty . replicateSeq (\ n g -> withScheduler Seq (\s -> replicateWork n s g)) i
 
 
-prop_ManyJobsInChunks :: NonSeq -> [[Int]] -> Property
-prop_ManyJobsInChunks (NonSeq comp) jss =
+prop_ManyJobsInChunks :: Comp -> [[Int]] -> Property
+prop_ManyJobsInChunks comp jss =
   concurrentExpectation $ do
     xs <- withScheduler comp $ \s ->
       forM_ jss $ \js -> do
@@ -436,7 +436,7 @@ prop_MutexException comp =
 
 prop_FindCancelResume :: Comp -> Int64 -> ([Int64], [Int64]) -> [Int64] -> Property
 prop_FindCancelResume comp x' (xs1', xs2') ys =
-  comp /= Seq ==> concurrentExpectation $ do
+  concurrentExpectation $ do
     let f = (10 *)
         g = (100 *)
         xs1 = filter (/= x') xs1'
