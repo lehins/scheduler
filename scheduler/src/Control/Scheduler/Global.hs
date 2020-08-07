@@ -33,8 +33,10 @@ newGlobalScheduler =
         terminateWorkers
         (mkWeakIORef ref . terminateWorkers)
 
+
 waitForGS :: MonadIO m => GlobalScheduler -> m ()
-waitForGS (GlobalScheduler ref) = liftIO $ readIORef ref >>= waitForResults_
+waitForGS (GlobalScheduler ref) = liftIO $ readIORef ref >>= waitForBatch_
+
 
 scheduleWorkGS :: MonadUnliftIO m => GlobalScheduler -> m a -> m ()
 scheduleWorkGS (GlobalScheduler ref) action =

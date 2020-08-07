@@ -32,6 +32,7 @@ module Control.Scheduler.Internal
   , safeBracketOnError
   ) where
 
+import Data.Coerce
 import Control.Concurrent
 import Control.Exception
 import Control.Monad
@@ -55,10 +56,11 @@ initWorkerStates :: MonadIO m => Comp -> (WorkerId -> m s) -> m (WorkerStates s)
 initWorkerStates comp initState = do
   nWorkers <- getCompWorkers comp
   arr <- liftIO $ newSmallArray nWorkers (error "Uninitialized")
-  let go i = when (i < nWorkers) $ do
-        state <- initState (WorkerId i)
-        liftIO $ writeSmallArray arr i state
-        go (i + 1)
+  let go i =
+        when (i < nWorkers) $ do
+          state <- initState (WorkerId i)
+          liftIO $ writeSmallArray arr i state
+          go (i + 1)
   go 0
   workerStates <- liftIO $ unsafeFreezeSmallArray arr
   mutex <- liftIO $ newIORef False
@@ -92,14 +94,17 @@ withSchedulerWSInternal withScheduler' states action =
 --
 -- @since 1.1.0
 trivialScheduler_ :: Applicative f => Scheduler f ()
-trivialScheduler_ = Scheduler
-  { _numWorkers = 1
-  , _scheduleWorkId = \f -> f (WorkerId 0)
-  , _terminate = const $ pure ()
-  , _terminateWith = const $ pure ()
-  , _waitForResults = pure $ Finished []
-  , _earlyResults = pure Nothing
-  }
+trivialScheduler_ =
+  Scheduler
+    { _numWorkers = 1
+    , _scheduleWorkId = \f -> f (WorkerId 0)
+    , _terminate = const $ pure ()
+    , _waitForBatch = pure $ Finished []
+    , _earlyResults = pure Nothing
+    , _currentBatchId = pure $ BatchId 0
+    , _cancelCurrentBatch = const $ pure ()
+    , _batchEarly = pure Nothing
+    }
 
 
 -- | This trivial scheduler will behave in a similar way as `withSchedulerR` with `Seq`
@@ -110,21 +115,29 @@ trivialScheduler_ = Scheduler
 withTrivialSchedulerR :: PrimMonad m => (Scheduler m a -> m b) -> m (Results a)
 withTrivialSchedulerR action = do
   resVar <- newMutVar []
+  batchVar <- newMutVar $ BatchId 0
   finResVar <- newMutVar Nothing
+  let bumpBatchId = atomicModifyMutVar' batchVar (\(BatchId x) -> (BatchId (x + 1), ()))
   _ <-
     action $
     Scheduler
       { _numWorkers = 1
       , _scheduleWorkId = \f -> f (WorkerId 0) >>= \r -> r `seq` modifyMutVar' resVar (r :)
       , _terminate =
-          \ !r ->
-            readMutVar resVar >>= \ !rs -> r <$ writeMutVar finResVar (Just (FinishedEarly rs r))
-      , _terminateWith = \ !r -> r <$ writeMutVar finResVar (Just (FinishedEarlyWith r))
-      , _waitForResults =
-          readMutVar finResVar >>= \case
+          \ !early -> do
+            finishEarly <-
+              case early of
+                Early r -> FinishedEarly <$> readMutVar resVar <*> pure r
+                EarlyWith r -> pure $ FinishedEarlyWith r
+            unEarly early <$ bumpBatchId <* writeMutVar finResVar (Just finishEarly)
+      , _waitForBatch =
+          bumpBatchId *> readMutVar finResVar >>= \case
             Just rs -> pure rs
             Nothing -> Finished <$> readMutVar resVar
       , _earlyResults = readMutVar finResVar
+      , _currentBatchId = readMutVar batchVar
+      , _batchEarly = pure Nothing
+      , _cancelCurrentBatch = const bumpBatchId
       }
   readMutVar finResVar >>= \case
     Just rs -> pure $ reverseResults rs
@@ -133,7 +146,9 @@ withTrivialSchedulerR action = do
 withTrivialSchedulerRIO :: MonadUnliftIO m => (Scheduler m a -> m b) -> m (Results a)
 withTrivialSchedulerRIO action = do
   resVar <- liftIO $ newIORef []
+  batchVar <- liftIO $ newIORef $ BatchId 0
   finResVar <- liftIO $ newIORef Nothing
+  let bumpBatchId = atomicModifyIORefCAS_ (coerce batchVar) (+ (1 :: Int))
   _ <-
     action $
     Scheduler
@@ -141,18 +156,25 @@ withTrivialSchedulerRIO action = do
       , _scheduleWorkId =
           \f -> do
             r <- f (WorkerId 0)
-            r `seq` liftIO (atomicModifyIORefCAS_ resVar (r :))
+            r `seq` liftIO (bumpBatchId >> atomicModifyIORefCAS_ resVar (r :))
       , _terminate =
-          \ !r ->
+          \ !early ->
             liftIO $ do
-              rs <- readIORef resVar
-              r <$ writeIORef finResVar (Just (FinishedEarly rs r))
-      , _terminateWith = \ !r -> r <$ liftIO (writeIORef finResVar (Just (FinishedEarlyWith r)))
-      , _waitForResults =
-          liftIO (readIORef finResVar) >>= \case
-            Just rs -> pure rs
-            Nothing -> Finished <$> liftIO (readIORef resVar)
+              finishEarly <-
+                case early of
+                  Early r -> FinishedEarly <$> readIORef resVar <*> pure r
+                  EarlyWith r -> pure $ FinishedEarlyWith r
+              unEarly early <$ bumpBatchId <* writeIORef finResVar (Just finishEarly)
+      , _waitForBatch =
+          liftIO $ do
+            bumpBatchId
+            readIORef finResVar >>= \case
+              Just rs -> pure rs
+              Nothing -> Finished <$> readIORef resVar
       , _earlyResults = liftIO (readIORef finResVar)
+      , _currentBatchId = liftIO (readIORef batchVar)
+      , _batchEarly = pure Nothing
+      , _cancelCurrentBatch = const $ liftIO bumpBatchId
       }
   liftIO (readIORef finResVar) >>= \case
     Just rs -> pure $ reverseResults rs
@@ -231,6 +253,8 @@ initScheduler comp submitWork collect = do
   jobsCountRef <- liftIO $ newIORef 0
   jobsSchedulerStatus <- liftIO $ newMVar SchedulerIdle
   earlyTerminationResultRef <- liftIO $ newIORef Nothing
+  batchIdRef <- liftIO $ newIORef $ BatchId 0
+  batchEarlyRef <- liftIO $ newIORef Nothing
   let jobs =
         Jobs
           { jobsNumWorkers = jobsNumWorkers
@@ -238,27 +262,43 @@ initScheduler comp submitWork collect = do
           , jobsCountRef = jobsCountRef
           , jobsSchedulerStatus = jobsSchedulerStatus
           }
-      blockForResults =
-        liftIO (readMVar jobsSchedulerStatus) >>= \case
-          SchedulerWorkerException (WorkerException exc) -> liftIO $ throwIO exc
-          SchedulerIdle -> Finished <$> collect jobsQueue
+      bumpBatchId = liftIO $ atomicModifyIORefCAS_ (coerce batchIdRef) (+ (1 :: Int))
       scheduler =
         Scheduler
           { _numWorkers = jobsNumWorkers
           , _scheduleWorkId = submitWork jobs
           , _terminate =
-              \a -> do
-                as <- collect jobsQueue
+              \early -> do
+                finishEarly <-
+                  case early of
+                    Early r -> FinishedEarly <$> collect jobsQueue <*> pure r
+                    EarlyWith r -> pure $ FinishedEarlyWith r
+                bumpBatchId
                 liftIO $ do
-                  writeIORef earlyTerminationResultRef $ Just $ FinishedEarly as a
+                  writeIORef earlyTerminationResultRef $ Just finishEarly
                   throwIO TerminateEarlyException
-          , _terminateWith =
-              \a ->
-                liftIO $ do
-                  writeIORef earlyTerminationResultRef $ Just $ FinishedEarlyWith a
-                  throwIO TerminateEarlyException
-          , _waitForResults = blockForResults
+          , _waitForBatch =
+              do status <- liftIO (readMVar jobsSchedulerStatus)
+                 mEarly <-
+                   liftIO $ atomicModifyIORefCAS batchEarlyRef $ \mEarly -> (Nothing, mEarly)
+                 case status of
+                   SchedulerWorkerException (WorkerException exc) -> liftIO $ throwIO exc
+                   SchedulerIdle -> collectResults mEarly . pure =<< collect jobsQueue
           , _earlyResults = liftIO (readIORef earlyTerminationResultRef)
+          , _currentBatchId = liftIO (readIORef batchIdRef)
+          , _batchEarly = liftIO (readIORef batchEarlyRef)
+          , _cancelCurrentBatch =
+              \early -> do
+                numJobsDiscarded <- clearPendingJQueue jobsQueue
+                liftIO $ writeIORef batchEarlyRef $ Just early
+                bumpBatchId
+                unless (numJobsDiscarded == 0) $
+                  liftIO $ do
+                    newCount <-
+                      atomicModifyIORefCAS jobsCountRef $ \count ->
+                        let !newCount = count - numJobsDiscarded
+                         in (newCount, newCount)
+                    when (newCount == 0) $ void $ tryPutMVar jobsSchedulerStatus SchedulerIdle
           }
   pure (jobs, scheduler)
 
@@ -273,7 +313,7 @@ withSchedulerInternal ::
      -- ^ Action that will be scheduling all the work.
   -> m c
 withSchedulerInternal comp submitWork collect adjust onScheduler = do
-  (jobs@Jobs{..}, scheduler) <- initScheduler comp submitWork collect
+  (jobs@Jobs {..}, scheduler) <- initScheduler comp submitWork collect
   -- / Wait for the initial jobs to get scheduled before spawining off the workers, otherwise it
   -- would be trickier to identify the beginning and the end of a job pool.
   let readEarlyTermination =
@@ -281,19 +321,18 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
           Nothing -> error "Impossible: uninitialized early termination value"
           Just rs -> pure $ adjust rs
       doWork tids =
-        withRunInIO $ \run ->
-          try (run (onScheduler scheduler)) >>= \case
+        withRunInIO $ \run -> do
+          eEarlyTermination <- try (run (onScheduler scheduler))
+          case eEarlyTermination of
             Left TerminateEarlyException ->
-              run $ do
-                terminateWorkers tids
-                readEarlyTermination
+              run $ terminateWorkers tids >> readEarlyTermination
             Right _ -> do
-              schedulerStatus <- liftIO (takeMVar jobsSchedulerStatus)
+              schedulerStatus <- takeMVar jobsSchedulerStatus
               -- \ wait for all worker to finish. If any one of the workers had a problem, then
               -- this MVar will contain an exception
+              run $ terminateWorkers tids
               case schedulerStatus of
                 SchedulerWorkerException (WorkerException exc) -> do
-                  run $ terminateWorkers tids
                   case fromException exc of
                     Just TerminateEarlyException -> run readEarlyTermination
                     Nothing -> throwIO exc
@@ -301,11 +340,19 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
                 -- the main thread will think like it's his own
                 SchedulerIdle ->
                   run $ do
-                    terminateWorkers tids
-                    adjust . Finished <$> collect jobsQueue
+                    mEarly <- _batchEarly scheduler
+                    adjust <$> collectResults mEarly (collect jobsQueue)
                 -- \ Now we are sure all workers have done their job we can safely read
                 -- all of the IORefs with results
   safeBracketOnError (spawnWorkers jobs comp) terminateWorkers doWork
+
+
+collectResults :: Applicative f => Maybe (Early a) -> f [a] -> f (Results a)
+collectResults mEarly collect =
+  case mEarly of
+    Nothing -> Finished <$> collect
+    Just (Early r) -> FinishedEarly <$> collect <*> pure r
+    Just (EarlyWith r) -> pure $ FinishedEarlyWith r
 
 
 spawnWorkers :: MonadUnliftIO m => Jobs m a -> Comp -> m [ThreadId]
@@ -321,7 +368,7 @@ spawnWorkers jobs@Jobs {jobsNumWorkers} =
       withRunInIO $ \run ->
         forM (zip [0 ..] ws) $ \(wId, on) ->
           fork on $ \unmask ->
-            catch (unmask $ run $ runWorker wId jobs) (\exc -> run $ handleWorkerException jobs exc)
+            catch (unmask $ run $ runWorker wId jobs) (run . handleWorkerException jobs)
 
 terminateWorkers :: MonadIO m => [ThreadId] -> m ()
 terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)

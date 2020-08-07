@@ -14,8 +14,10 @@ module Control.Scheduler.Types
   , WorkerStates(..)
   , SchedulerWS(..)
   , GlobalScheduler(..)
-
+  , BatchId(..)
   , Jobs(..)
+  , Early(..)
+  , unEarly
   , Results(..)
   , SchedulerStatus(..)
   , WorkerException(..)
@@ -35,9 +37,9 @@ import Data.Primitive.SmallArray
 --
 -- @since 1.4.2
 data Results a
-  = Finished ![a]
+  = Finished [a]
   -- ^ Finished normally with all scheduled jobs completed
-  | FinishedEarly ![a] !a
+  | FinishedEarly [a] !a
   -- ^ Finished early by the means of `Control.Scheduler.terminate`.
   | FinishedEarlyWith !a
   -- ^ Finished early by the means of `Control.Scheduler.terminateWith`.
@@ -76,17 +78,32 @@ data Jobs m a = Jobs
   , jobsSchedulerStatus :: !(MVar SchedulerStatus)
   }
 
+
+-- | This is a result for premature ending of computation.
+data Early a
+  = Early a
+  -- ^ This value along with all results computed up to the moment when computation was
+  -- cancelled or termianted will be returned
+  | EarlyWith a
+  -- ^ Only this value will be returned all other results will get discarded
+
+unEarly :: Early a -> a
+unEarly (Early r) = r
+unEarly (EarlyWith r) = r
+
 -- | Main type for scheduling work. See `Control.Scheduler.withScheduler` or
 -- `Control.Scheduler.withScheduler_` for ways to construct and use this data type.
 --
 -- @since 1.0.0
 data Scheduler m a = Scheduler
-  { _numWorkers     :: {-# UNPACK #-} !Int
-  , _scheduleWorkId :: (WorkerId -> m a) -> m ()
-  , _terminate      :: a -> m a
-  , _terminateWith  :: a -> m a
-  , _waitForResults :: m (Results a)
-  , _earlyResults   :: m (Maybe (Results a))
+  { _numWorkers         :: {-# UNPACK #-} !Int
+  , _scheduleWorkId     :: (WorkerId -> m a) -> m ()
+  , _terminate          :: Early a -> m a
+  , _waitForBatch       :: m (Results a)
+  , _earlyResults       :: m (Maybe (Results a))
+  , _currentBatchId     :: m BatchId
+  , _cancelCurrentBatch :: Early a -> m ()
+  , _batchEarly         :: m (Maybe (Early a))
   }
 
 -- | This is a wrapper around `Scheduler`, but it also keeps a separate state for each
@@ -111,6 +128,9 @@ data WorkerStates s = WorkerStates
   , _workerStatesMutex :: !(IORef Bool)
   }
 
+
+newtype BatchId = BatchId { getBatchId :: Int }
+  deriving (Show, Eq, Ord)
 
 newtype GlobalScheduler = GlobalScheduler (IORef (Scheduler IO ()))
 

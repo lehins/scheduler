@@ -13,11 +13,14 @@ module Control.Scheduler.Queue
   (  -- * Job queue
     Job(Job_)
   , mkJob
-  , JQueue
+  , Queue(..)
+  , JQueue(..)
   , WorkerId(..)
   , newJQueue
   , pushJQueue
   , popJQueue
+  , flushJQueue
+  , clearPendingJQueue
   , readResults
   ) where
 
@@ -46,7 +49,7 @@ data Queue m a = Queue
 -- @since 1.4.0
 newtype WorkerId = WorkerId
   { getWorkerId :: Int
-  } deriving (Show, Read, Eq, Ord, Enum, Num)
+  } deriving (Show, Read, Eq, Ord, Enum, Bounded, Num, Real, Integral)
 
 
 popQueue :: Queue m a -> Maybe (Job m a, Queue m a)
@@ -109,6 +112,20 @@ popJQueue (JQueue jQueueRef) = liftIO inner
             , case job of
                 Job _ action -> return (void . action)
                 Job_ action_ -> return action_)
+
+
+-- | Same as `clearPendingJQueue`, but returns the actual that are being removed.
+flushJQueue :: MonadIO m => JQueue m a -> m [Job m a]
+flushJQueue (JQueue queueRef) =
+  liftIO $ atomicModifyIORefCAS queueRef $ \queue ->
+    (queue {qQueue = [], qStack = []}, qQueue queue ++ reverse (qStack queue))
+
+-- | Clears any jobs that haven't been popped yet. Returns the number of jobs that have
+-- been removed
+clearPendingJQueue :: MonadIO m => JQueue m a -> m Int
+clearPendingJQueue (JQueue queueRef) =
+  liftIO $ atomicModifyIORefCAS queueRef $ \queue ->
+    (queue {qQueue = [], qStack = []}, length (qQueue queue) + length (qStack queue))
 
 
 -- | Extracts all results available up to now, the uncomputed ones are discarded.

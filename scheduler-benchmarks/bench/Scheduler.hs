@@ -4,7 +4,7 @@ module Main where
 
 import qualified Control.Concurrent.Async as A (mapConcurrently, replicateConcurrently)
 import Control.Monad (replicateM_, replicateM)
-import Control.Monad.Par (IVar, Par, get, newFull_, runParIO) --, parMapM)
+import Control.Monad.Par (IVar, Par, get, newFull_, runParIO)
 import Control.Parallel (par)
 import Control.Scheduler
 import Control.Concurrent (getNumCapabilities)
@@ -13,7 +13,6 @@ import Criterion.Main
 import Control.DeepSeq
 import Data.Foldable as F
 import Data.IORef
---import Fib
 import Streamly (asyncly)
 import qualified Streamly.Prelude as S
 import UnliftIO.Async (pooledMapConcurrently, pooledReplicateConcurrently)
@@ -23,7 +22,7 @@ main = do
   let k = 10000
   caps <- getNumCapabilities
   AsyncPool.withTaskGroup caps $ \ !taskGroup ->
-    defaultMain $
+    defaultMain
     [ bgroup
         "withScheduler"
         [ bgroup

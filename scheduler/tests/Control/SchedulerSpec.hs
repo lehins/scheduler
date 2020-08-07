@@ -5,6 +5,7 @@ module Control.SchedulerSpec
   ( spec
   ) where
 
+import Data.Int
 import Control.Concurrent (killThread, myThreadId, threadDelay, yield)
 import Control.Concurrent.MVar
 import Control.DeepSeq
@@ -125,12 +126,12 @@ prop_ReplicateWorkSeq i =
 prop_ManyJobsInChunks :: NonSeq -> [[Int]] -> Property
 prop_ManyJobsInChunks (NonSeq comp) jss =
   concurrentExpectation $ do
-    void $ withScheduler comp $ \s ->
+    xs <- withScheduler comp $ \s ->
       forM_ jss $ \js -> do
         mapM_ (scheduleWork s . pure) js
-        rs <- waitForResults s
+        rs <- waitForBatch s
         rs `shouldBe` js
-    --xs `shouldBe` []
+    xs `shouldBe` []
 
 prop_ArbitraryCompNested :: [(Comp, Int)] -> Property
 prop_ArbitraryCompNested xs =
@@ -418,6 +419,61 @@ prop_MutexException comp =
     withSchedulerWS_ state $ \schedulerWS ->
       scheduleWorkState_ schedulerWS $ \_s -> withSchedulerWS_ state $ \_s' -> pure ()
 
+-- prop_CancelBatchAndResume :: Comp -> Int -> ([Int], [Int]) -> [Int] -> [Int] -> Property
+-- prop_CancelBatchAndResume comp x' (xs1, xs2) ys zs =
+--   concurrentPropertyIO $ do
+--     res <-
+--       withScheduler comp $ \s -> do
+--         batchId <- getCurrentBatchId s
+--         forM_ (concat [xs1, [x'], xs2]) $ \x -> scheduleWork s $ do
+--           hasFinished <- hasBatchFinished s batchId
+--           if hasFinished then pure Nothing $ do
+--             if x == x'
+--               then x <$ cancelBatchWith s x
+--               else pure x
+--         waitForBatchR s `shouldReturn` x'
+--     pure (res === zs)
+
+prop_FindCancelResume :: Comp -> Int64 -> ([Int64], [Int64]) -> [Int64] -> Property
+prop_FindCancelResume comp x' (xs1', xs2') ys =
+  comp /= Seq ==> concurrentExpectation $ do
+    let f = (10 *)
+        g = (100 *)
+        xs1 = filter (/= x') xs1'
+        xs2 = filter (/= x') xs2'
+        xs = concat [xs1, [x'], xs2]
+    res <-
+      withSchedulerR comp $ \s -> do
+        forM_ xs $ \x ->
+          scheduleWork s $ do
+            if x == x'
+              then Just x <$ cancelBatchWith s (Just (f x))
+              else pure Nothing
+        waitForBatchR s `shouldReturn` FinishedEarlyWith (Just (f x'))
+        forM_ ys (scheduleWork s . pure . Just)
+        waitForBatchR s `shouldReturn` Finished (map Just ys)
+        forM_ xs $ \x ->
+          scheduleWork s $ do
+            if x == x'
+              then Just x <$ cancelBatch s (Just (g x))
+              else pure $ Just (f x)
+    case res of
+      FinishedEarly rs r -> do
+        r `shouldBe` Just (g x')
+        rs `satisfyOrderedPartialPrefix` concat [map (Just . f) xs1, [Just x'], map (Just . f) xs2]
+      fr -> expectationFailure $ "Unexpected result: " ++ show fr
+  where
+    satisfyOrderedPartialPrefix as bs =
+      unless (orderedPartialPrefixOf as bs) $
+      expectationFailure $
+      "Expected " ++
+      show as ++ " to be prefix of " ++ show bs ++ " possibly with some elements skipped"
+    -- Make sure the first list is the prefix of the second
+    orderedPartialPrefixOf [] _ = True
+    orderedPartialPrefixOf (_:_) [] = False
+    orderedPartialPrefixOf (a:as) (b:bs)
+      | a == b = orderedPartialPrefixOf as bs
+      | otherwise = orderedPartialPrefixOf (a : as) bs
 
 spec :: Spec
 spec = do
@@ -515,6 +571,9 @@ spec = do
     prop "WorkerStateExclusive" prop_WorkerStateExclusive
   describe "Restartable" $ do
     prop "ManyJobsInChunks" prop_ManyJobsInChunks
+    prop "FindCancelResume" $ prop_FindCancelResume
+    -- prop "CancelBatchAndResume" $ prop_CancelBatchAndResume
+    -- prop "ManyJobsStoppedEarly" prop_ManyJobsStoppedEarly
 
 instance Arbitrary WorkerId where
   arbitrary = WorkerId <$> arbitrary
