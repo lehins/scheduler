@@ -147,9 +147,9 @@ withTrivialSchedulerR action = do
     Nothing -> do
       mEarly <- takeBatchEarly
       reverseResults <$> collectResults mEarly takeResults
-
+-- | Same as `withTrivialSchedulerIO`, but works in MonadIO and returns results in an
+-- original LIFO order.
 withTrivialSchedulerRIO :: MonadUnliftIO m => (Scheduler m a -> m b) -> m (Results a)
-
 withTrivialSchedulerRIO action = do
   resRef <- liftIO $ newIORef []
   batchRef <- liftIO $ newIORef $ BatchId 0
@@ -183,10 +183,10 @@ withTrivialSchedulerRIO action = do
           \early -> liftIO (writeIORef batchEarlyRef (Just early) >> bumpBatchId)
       }
   liftIO (readIORef finResRef) >>= \case
-    Just rs -> pure $ reverseResults rs
+    Just rs -> pure rs
     Nothing -> liftIO $ do
       mEarly <- takeBatchEarly
-      reverseResults <$> collectResults mEarly takeResults
+      collectResults mEarly takeResults
 
 
 -- | This is generally a faster way to traverse while ignoring the result rather than using `mapM_`.

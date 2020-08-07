@@ -254,12 +254,6 @@ withTrivialScheduler :: PrimMonad m => (Scheduler m a -> m b) -> m [a]
 withTrivialScheduler action = F.toList <$> withTrivialSchedulerR action
 
 
-withTrivialSchedulerIO_ :: MonadUnliftIO f => (Scheduler f a -> f b) -> f ()
-withTrivialSchedulerIO_ action = void $ withTrivialSchedulerRIO action
-
-withTrivialSchedulerIO :: MonadUnliftIO f => (Scheduler f a -> f b) -> f [a]
-withTrivialSchedulerIO action = F.toList <$> withTrivialSchedulerRIO action
-
 
 -- | Map an action over each element of the `Traversable` @t@ acccording to the supplied computation
 -- strategy.
@@ -336,8 +330,9 @@ withScheduler ::
   -> (Scheduler m a -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m [a]
-withScheduler Seq = withTrivialSchedulerIO
-withScheduler comp = withSchedulerInternal comp scheduleJobs readResults (reverse . resultsToList)
+withScheduler Seq action = reverse . resultsToList <$> withTrivialSchedulerRIO action
+withScheduler comp action =
+  withSchedulerInternal comp scheduleJobs readResults (reverse . resultsToList) action
 
 -- | Same as `withScheduler`, except instead of a list it produces `Results`, which allows
 -- for distinguishing between the ways computation was terminated.
@@ -349,7 +344,7 @@ withSchedulerR ::
   -> (Scheduler m a -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m (Results a)
-withSchedulerR Seq = withTrivialSchedulerRIO
+withSchedulerR Seq = fmap reverseResults . withTrivialSchedulerRIO
 withSchedulerR comp = withSchedulerInternal comp scheduleJobs readResults reverseResults
 
 
@@ -362,7 +357,7 @@ withScheduler_ ::
   -> (Scheduler m a -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m ()
-withScheduler_ Seq = withTrivialSchedulerIO_
+withScheduler_ Seq = void . withTrivialSchedulerRIO
 withScheduler_ comp = void . withSchedulerInternal comp scheduleJobs_ (const (pure [])) (const ())
 
 
