@@ -316,18 +316,17 @@ withSchedulerInternal ::
   => Comp -- ^ Computation strategy
   -> (Jobs m a -> (WorkerId -> m a) -> m ()) -- ^ How to schedule work
   -> (JQueue m a -> m [a]) -- ^ How to collect results
-  -> (Results a -> c) -- ^ Adjust results in some way
   -> (Scheduler m a -> m b)
      -- ^ Action that will be scheduling all the work.
-  -> m c
-withSchedulerInternal comp submitWork collect adjust onScheduler = do
+  -> m (Results a)
+withSchedulerInternal comp submitWork collect onScheduler = do
   (jobs@Jobs {..}, scheduler) <- initScheduler comp submitWork collect
   -- / Wait for the initial jobs to get scheduled before spawining off the workers, otherwise it
   -- would be trickier to identify the beginning and the end of a job pool.
   let readEarlyTermination =
         _earlyResults scheduler >>= \case
           Nothing -> error "Impossible: uninitialized early termination value"
-          Just rs -> pure $ adjust rs
+          Just rs -> pure rs
       doWork tids =
         withRunInIO $ \run -> do
           eEarlyTermination <- try (run (onScheduler scheduler))
@@ -349,7 +348,7 @@ withSchedulerInternal comp submitWork collect adjust onScheduler = do
                 SchedulerIdle ->
                   run $ do
                     mEarly <- _batchEarly scheduler
-                    adjust <$> collectResults mEarly (collect jobsQueue)
+                    collectResults mEarly (collect jobsQueue)
                 -- \ Now we are sure all workers have done their job we can safely read
                 -- all of the IORefs with results
   safeBracketOnError (spawnWorkers jobs comp) terminateWorkers doWork
