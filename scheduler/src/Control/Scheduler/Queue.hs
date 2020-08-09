@@ -85,6 +85,7 @@ newJQueue =
 pushJQueue :: MonadIO m => JQueue m a -> Job m a -> m Int
 pushJQueue (JQueue jQueueRef) job =
   liftIO $ do
+    newBaton <- newEmptyMVar
     join $
       atomicModifyIORefCAS
         jQueueRef
@@ -97,8 +98,9 @@ pushJQueue (JQueue jQueueRef) job =
                        case job of
                          Job resRef _ -> resRef : qResults
                          _ -> qResults
+                   , qBaton = newBaton
                    }
-            in (q, qCount <$ tryPutMVar qBaton ()))
+            in (q, qCount <$ putMVar qBaton ()))
 
 -- | Pops an item from the queue. The job returns the total job counts that is still left
 -- in the queue
@@ -110,11 +112,10 @@ popJQueue (JQueue jQueueRef) = liftIO inner
         let !newCount = qCount queue - 1
          in (queue {qCount = newCount}, newCount)
     inner = do
-      newBaton <- newEmptyMVar
       join $
         atomicModifyIORefCAS jQueueRef $ \queue ->
           case popQueue queue of
-            Nothing -> (queue { qBaton = newBaton }, takeMVar newBaton >> inner)
+            Nothing -> (queue, readMVar (qBaton queue) >> inner)
             Just (job, newQueue) ->
               ( newQueue
               , case job of
