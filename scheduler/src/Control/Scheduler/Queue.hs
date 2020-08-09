@@ -38,7 +38,7 @@ data Queue m a = Queue
   { qQueue   :: ![Job m a]
   , qStack   :: ![Job m a]
   , qResults :: ![IORef (Maybe a)]
-  , qBaton   :: !(MVar ())
+  , qBaton   :: {-# UNPACK #-} !(MVar ())
   }
 
 
@@ -62,7 +62,7 @@ popQueue queue =
         y:ys -> Just (y, queue {qQueue = ys, qStack = []})
 
 data Job m a
-  = Job !(IORef (Maybe a)) (WorkerId -> m a)
+  = Job {-# UNPACK #-} !(IORef (Maybe a)) (WorkerId -> m a)
   | Job_ (WorkerId -> m ())
 
 

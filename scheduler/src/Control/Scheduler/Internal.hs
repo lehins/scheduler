@@ -147,6 +147,9 @@ withTrivialSchedulerR action = do
     Nothing -> do
       mEarly <- takeBatchEarly
       reverseResults <$> collectResults mEarly takeResults
+
+
+
 -- | Same as `withTrivialSchedulerIO`, but works in MonadIO and returns results in an
 -- original LIFO order.
 withTrivialSchedulerRIO :: MonadUnliftIO m => (Scheduler m a -> m b) -> m (Results a)
@@ -158,35 +161,37 @@ withTrivialSchedulerRIO action = do
   let bumpBatchId = atomicModifyIORefCAS_ (coerce batchRef) (+ (1 :: Int))
       takeBatchEarly = atomicModifyIORefCAS batchEarlyRef $ \mEarly -> (Nothing, mEarly)
       takeResults = atomicModifyIORefCAS resRef $ \res -> ([], res)
-  _ <-
-    action $
-    Scheduler
-      { _numWorkers = 1
-      , _scheduleWorkId =
-          \f -> do
-            r <- f (WorkerId 0)
-            r `seq` liftIO (bumpBatchId >> atomicModifyIORefCAS_ resRef (r :))
-      , _terminate =
-          \ !early ->
-            liftIO $ do
-              finishEarly <- collectResults (Just early) takeResults
-              unEarly early <$ bumpBatchId <* writeIORef finResRef (Just finishEarly)
-      , _waitForBatch =
-          liftIO $ do
-            bumpBatchId
-            mEarly <- takeBatchEarly
-            collectResults mEarly . pure =<< takeResults
-      , _earlyResults = liftIO (readIORef finResRef)
-      , _currentBatchId = liftIO (readIORef batchRef)
-      , _batchEarly = liftIO takeBatchEarly
-      , _cancelCurrentBatch =
-          \early -> liftIO (writeIORef batchEarlyRef (Just early) >> bumpBatchId)
-      }
+      scheduler =
+        Scheduler
+          { _numWorkers = 1
+          , _scheduleWorkId =
+              \f -> do
+                r <- f (WorkerId 0)
+                r `seq` liftIO (bumpBatchId >> atomicModifyIORefCAS_ resRef (r :))
+          , _terminate =
+              \ !early ->
+                liftIO $ do
+                  finishEarly <- collectResults (Just early) takeResults
+                  bumpBatchId <* writeIORef finResRef (Just finishEarly)
+                  throwIO TerminateEarlyException
+          , _waitForBatch =
+              liftIO $ do
+                bumpBatchId
+                mEarly <- takeBatchEarly
+                collectResults mEarly . pure =<< takeResults
+          , _earlyResults = liftIO (readIORef finResRef)
+          , _currentBatchId = liftIO (readIORef batchRef)
+          , _batchEarly = liftIO takeBatchEarly
+          , _cancelCurrentBatch =
+              \early -> liftIO (writeIORef batchEarlyRef (Just early) >> bumpBatchId)
+          }
+  _ :: Either TerminateEarlyException b <- withRunInIO $ \run -> try $ run $ action scheduler
   liftIO (readIORef finResRef) >>= \case
     Just rs -> pure rs
-    Nothing -> liftIO $ do
-      mEarly <- takeBatchEarly
-      collectResults mEarly takeResults
+    Nothing ->
+      liftIO $ do
+        mEarly <- takeBatchEarly
+        collectResults mEarly takeResults
 
 
 -- | This is generally a faster way to traverse while ignoring the result rather than using `mapM_`.

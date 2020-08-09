@@ -571,7 +571,7 @@ spec = do
     prop "WorkerStateExclusive" prop_WorkerStateExclusive
   describe "Restartable" $ do
     prop "ManyJobsInChunks" prop_ManyJobsInChunks
-    prop "FindCancelResume" $ prop_FindCancelResume
+    prop "FindCancelResume" prop_FindCancelResume
     -- prop "CancelBatchAndResume" $ prop_CancelBatchAndResume
     -- prop "ManyJobsStoppedEarly" prop_ManyJobsStoppedEarly
 

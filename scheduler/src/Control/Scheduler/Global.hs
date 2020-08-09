@@ -9,7 +9,9 @@
 module Control.Scheduler.Global
   ( GlobalScheduler
   , newGlobalScheduler
-  , waitForGS
+  , waitForBatchGS
+  , cancelBatchGS
+  , hasBatchFinishedGS
   , scheduleWorkGS
   ) where
 
@@ -22,20 +24,30 @@ import Data.IORef
 
 
 
-newGlobalScheduler :: MonadIO m => m GlobalScheduler
-newGlobalScheduler =
+newGlobalScheduler :: MonadIO m => Comp -> m GlobalScheduler
+newGlobalScheduler comp =
   liftIO $ do
-    (jobs, scheduler) <- initScheduler Par scheduleJobs_ (const (pure []))
+    (jobs, scheduler) <- initScheduler comp scheduleJobs_ (const (pure []))
     ref <- newIORef scheduler
     GlobalScheduler ref <$
       safeBracketOnError
-        (spawnWorkers jobs Par)
+        (spawnWorkers jobs comp)
         terminateWorkers
         (mkWeakIORef ref . terminateWorkers)
 
 
-waitForGS :: MonadIO m => GlobalScheduler -> m ()
-waitForGS (GlobalScheduler ref) = liftIO $ readIORef ref >>= waitForBatch_
+waitForBatchGS :: MonadIO m => GlobalScheduler -> m ()
+waitForBatchGS (GlobalScheduler ref) = liftIO $ readIORef ref >>= waitForBatch_
+
+cancelBatchGS :: MonadIO m => GlobalScheduler -> m ()
+cancelBatchGS (GlobalScheduler ref) =
+  liftIO $ readIORef ref >>= \ scheduler -> _cancelCurrentBatch scheduler (Early ())
+
+
+hasBatchFinishedGS :: MonadIO m => GlobalScheduler -> BatchId -> m Bool
+hasBatchFinishedGS (GlobalScheduler ref) batchId =
+  liftIO $ readIORef ref >>= \ scheduler -> hasBatchFinished scheduler batchId
+
 
 
 scheduleWorkGS :: MonadUnliftIO m => GlobalScheduler -> m a -> m ()
