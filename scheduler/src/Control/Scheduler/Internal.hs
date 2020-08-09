@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE Unsafe #-}
@@ -201,30 +202,36 @@ traverse_ :: (Applicative f, Foldable t) => (a -> f ()) -> t a -> f ()
 traverse_ f = F.foldl' (\c a -> c *> f a) (pure ())
 
 
-scheduleJobs :: MonadIO m => Jobs m a -> (WorkerId -> m a) -> m ()
+scheduleJobs :: MonadUnliftIO m => Jobs m a -> (WorkerId -> m a) -> m ()
 scheduleJobs = scheduleJobsWith mkJob
 
 -- | Ignores the result of computation, thus having less overhead.
-scheduleJobs_ :: MonadIO m => Jobs m a -> (WorkerId -> m b) -> m ()
+scheduleJobs_ :: MonadUnliftIO m => Jobs m a -> (WorkerId -> m b) -> m ()
 scheduleJobs_ = scheduleJobsWith (\job -> pure (Job_ (void . job (\_ -> pure ()))))
 
 scheduleJobsWith ::
-     MonadIO m
-  => (((b -> m ()) -> WorkerId -> m b) -> m (Job m a))
+     MonadUnliftIO m
+  => (((b -> m ()) -> WorkerId -> m ()) -> m (Job m a))
   -> Jobs m a
   -> (WorkerId -> m b)
   -> m ()
 scheduleJobsWith mkJob' Jobs {..} action = do
-  liftIO $ do
-    prevCount <- atomicModifyIORefCAS jobsCountRef (\prev -> (prev + 1, prev))
-    when (prevCount == 0) $ void $ takeMVar jobsSchedulerStatus
   job <-
     mkJob' $ \storeResult i -> do
       res <- action i
       res `seq` storeResult res
       dropCounterOnZero jobsCountRef $ liftIO $ void $ tryPutMVar jobsSchedulerStatus SchedulerIdle
-      return res
-  pushJQueue jobsQueue job
+      -- withRunInIO $ \ run ->
+      --   try (run (action i)) >>= \case
+      --     Left exc -> do
+      --       --unless cancelBatchException
+      --       void $ tryPutMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
+      --       throwIO exc
+      --     Right res -> res `seq` run (storeResult res)
+  liftIO $ do
+    prevCount <- atomicModifyIORefCAS jobsCountRef (\prev -> (prev + 1, prev))
+    when (prevCount == 0) $ void $ takeMVar jobsSchedulerStatus
+  void $ pushJQueue jobsQueue job
 
 
 -- | Decrease a counter by one and perform an action when it drops down to zero.
@@ -240,18 +247,49 @@ dropCounterOnZero counterRef onZero = do
   when (jc == 0) onZero
 
 
--- | Runs the worker until it is terminated with an `WorkerTerminateException` or killed
--- by some other asynchronous exception.
+-- -- | Runs the worker until it is terminated with an `WorkerTerminateException` or killed
+-- -- by some other asynchronous exception.
+-- runWorker ::
+--      MonadUnliftIO m
+--   => (forall b. m b -> IO b)
+--   -> (forall c. IO c -> IO c)
+--   -> WorkerId
+--   -> Jobs m a
+--   -> m ()
+-- runWorker run unmask wId Jobs {jobsQueue, jobsCountRef, jobsSchedulerStatus} = liftIO go
+--   where
+--     workerIteration =
+--       bracket
+--         (run (popJQueue jobsQueue))
+--         (\_ ->
+--            dropCounterOnZero jobsCountRef $
+--            liftIO $ void $ tryPutMVar jobsSchedulerStatus SchedulerIdle)
+--         (\(_, job) -> run $ job wId)
+--     go = do
+--       catch (unmask workerIteration) $ \exc -> do
+--         case asyncExceptionFromException exc of
+--           Just WorkerTerminateException -> return ()
+--           Nothing -> do
+--             void $ tryPutMVar jobsSchedulerStatus $ SchedulerWorkerException $ WorkerException exc
+--             unless (isSyncException exc) $
+--               case asyncExceptionFromException exc of
+--                 Just CancelBatchException -> return ()
+--                 Nothing -> throwIO exc
+--             go
+
+
 runWorker :: MonadUnliftIO m => WorkerId -> Jobs m a -> m ()
 runWorker wId Jobs {jobsQueue, jobsSchedulerStatus} = go
-  where
-    go = do
-      job <- popJQueue jobsQueue
+   where
+     go = do
+      (_, job) <- popJQueue jobsQueue
       withRunInIO $ \run ->
         catch (run (job wId)) $ \exc -> do
           unless (isSyncException exc) $ throwIO exc
           void $ tryPutMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
       go
+
+
 
 
 initScheduler ::
@@ -367,7 +405,7 @@ collectResults mEarly collect =
     Just (EarlyWith r) -> pure $ FinishedEarlyWith r
 
 
-spawnWorkers :: MonadUnliftIO m => Jobs m a -> Comp -> m [ThreadId]
+spawnWorkers :: forall m a. MonadUnliftIO m => Jobs m a -> Comp -> m [ThreadId]
 spawnWorkers jobs@Jobs {jobsNumWorkers} =
   \case
     Par -> spawnWorkersWith forkOnWithUnmask [1 .. jobsNumWorkers]
@@ -376,10 +414,15 @@ spawnWorkers jobs@Jobs {jobsNumWorkers} =
     Seq -> spawnWorkersWith (\_ -> forkIOWithUnmask) [1 :: Int]
     -- \ sequential computation is suboptimal when used in this way.
   where
+    spawnWorkersWith ::
+         MonadUnliftIO m
+      => (Int -> ((forall c. IO c -> IO c) -> IO ()) -> IO ThreadId)
+      -> [Int]
+      -> m [ThreadId]
     spawnWorkersWith fork ws =
       withRunInIO $ \run ->
         forM (zip [0 ..] ws) $ \(wId, on) ->
-          fork on $ \unmask ->
+          fork on $ \unmask -> --run $ runWorker run unmask wId jobs
             catch (unmask $ run $ runWorker wId jobs) (run . handleWorkerException jobs)
 
 terminateWorkers :: MonadIO m => [ThreadId] -> m ()

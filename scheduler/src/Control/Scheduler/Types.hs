@@ -21,6 +21,7 @@ module Control.Scheduler.Types
   , Results(..)
   , SchedulerStatus(..)
   , WorkerException(..)
+  , CancelBatchException(..)
   , TerminateEarlyException(..)
   , WorkerTerminateException(..)
   , MutexException(..)
@@ -144,6 +145,12 @@ data TerminateEarlyException =
   deriving (Show)
 
 instance Exception TerminateEarlyException
+
+data CancelBatchException =
+  CancelBatchException
+  deriving (Show)
+
+instance Exception CancelBatchException
 
 -- | This exception should normally be never seen in the wild and is for internal use only.
 newtype WorkerException =

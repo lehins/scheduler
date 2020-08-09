@@ -35,7 +35,8 @@ import Data.IORef
 -- | A blocking unbounded queue that keeps the jobs in FIFO order and the results IORefs
 -- in reversed
 data Queue m a = Queue
-  { qQueue   :: ![Job m a]
+  { qCount   :: {-# UNPACK #-} !Int
+  , qQueue   :: ![Job m a]
   , qStack   :: ![Job m a]
   , qResults :: ![IORef (Maybe a)]
   , qBaton   :: {-# UNPACK #-} !(MVar ())
@@ -55,18 +56,18 @@ newtype WorkerId = WorkerId
 popQueue :: Queue m a -> Maybe (Job m a, Queue m a)
 popQueue queue =
   case qQueue queue of
-    x:xs -> Just (x, queue {qQueue = xs})
+    x:xs -> Just (x, queue {qCount = qCount queue - 1, qQueue = xs})
     [] ->
       case reverse (qStack queue) of
         []   -> Nothing
-        y:ys -> Just (y, queue {qQueue = ys, qStack = []})
+        y:ys -> Just (y, queue {qCount = qCount queue - 1, qQueue = ys, qStack = []})
 
 data Job m a
-  = Job {-# UNPACK #-} !(IORef (Maybe a)) (WorkerId -> m a)
+  = Job {-# UNPACK #-} !(IORef (Maybe a)) (WorkerId -> m ())
   | Job_ (WorkerId -> m ())
 
 
-mkJob :: MonadIO m => ((a -> m ()) -> WorkerId -> m a) -> m (Job m a)
+mkJob :: MonadIO m => ((a -> m ()) -> WorkerId -> m ()) -> m (Job m a)
 mkJob action = do
   resRef <- liftIO $ newIORef Nothing
   return $! Job resRef (action (liftIO . writeIORef resRef . Just))
@@ -77,29 +78,30 @@ newJQueue :: MonadIO m => m (JQueue m a)
 newJQueue =
   liftIO $ do
     newBaton <- newEmptyMVar
-    queueRef <- newIORef (Queue [] [] [] newBaton)
+    queueRef <- newIORef (Queue 0 [] [] [] newBaton)
     return $ JQueue queueRef
 
-
-pushJQueue :: MonadIO m => JQueue m a -> Job m a -> m ()
+-- | Pushes an item onto a queue and returns the previous count.
+pushJQueue :: MonadIO m => JQueue m a -> Job m a -> m Int
 pushJQueue (JQueue jQueueRef) job =
   liftIO $ do
     newBaton <- newEmptyMVar
     join $
       atomicModifyIORefCAS
         jQueueRef
-        (\Queue {qQueue, qStack, qResults, qBaton} ->
+        (\Queue {qCount, qQueue, qStack, qResults, qBaton} ->
            ( Queue
+               (qCount + 1)
                qQueue
                (job : qStack)
                (case job of
                   Job resRef _ -> resRef : qResults
-                  _            -> qResults)
+                  _ -> qResults)
                newBaton
-           , liftIO $ putMVar qBaton ()))
+           , qCount <$ putMVar qBaton ()))
 
-
-popJQueue :: MonadIO m => JQueue m a -> m (WorkerId -> m ())
+-- | Pops an item from the queue. Also return current job count (without the popped element)
+popJQueue :: MonadIO m => JQueue m a -> m (Int, WorkerId -> m ())
 popJQueue (JQueue jQueueRef) = liftIO inner
   where
     inner =
@@ -110,22 +112,22 @@ popJQueue (JQueue jQueueRef) = liftIO inner
           Just (job, newQueue) ->
             ( newQueue
             , case job of
-                Job _ action -> return (void . action)
-                Job_ action_ -> return action_)
+                Job _ action -> return (qCount newQueue, action)
+                Job_ action_ -> return (qCount newQueue, action_))
 
 
 -- | Same as `clearPendingJQueue`, but returns the actual that are being removed.
 flushJQueue :: MonadIO m => JQueue m a -> m [Job m a]
 flushJQueue (JQueue queueRef) =
   liftIO $ atomicModifyIORefCAS queueRef $ \queue ->
-    (queue {qQueue = [], qStack = []}, qQueue queue ++ reverse (qStack queue))
+    (queue {qCount = 0, qQueue = [], qStack = []}, qQueue queue ++ reverse (qStack queue))
 
 -- | Clears any jobs that haven't been popped yet. Returns the number of jobs that have
 -- been removed
 clearPendingJQueue :: MonadIO m => JQueue m a -> m Int
 clearPendingJQueue (JQueue queueRef) =
   liftIO $ atomicModifyIORefCAS queueRef $ \queue ->
-    (queue {qQueue = [], qStack = []}, length (qQueue queue) + length (qStack queue))
+    (queue {qCount = 0, qQueue = [], qStack = []}, length (qQueue queue) + length (qStack queue))
 
 
 -- | Extracts all results available up to now, the uncomputed ones are discarded.
