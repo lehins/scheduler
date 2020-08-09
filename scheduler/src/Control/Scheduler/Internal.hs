@@ -33,6 +33,7 @@ module Control.Scheduler.Internal
   , safeBracketOnError
   ) where
 
+import Say
 import Data.Coerce
 import Control.Concurrent
 import Control.Exception
@@ -217,12 +218,12 @@ scheduleJobsWith ::
   -> m ()
 scheduleJobsWith mkJob' Jobs {..} action = do
   job <-
-    mkJob' $ \storeResult i -> do
-      res <- action i
+    mkJob' $ \storeResult wid -> do
+      res <- action wid
       res `seq` storeResult res
       dropCounterOnZero jobsCountRef $ liftIO $ void $ tryPutMVar jobsSchedulerStatus SchedulerIdle
       -- withRunInIO $ \ run ->
-      --   try (run (action i)) >>= \case
+      --   try (run (action wid)) >>= \case
       --     Left exc -> do
       --       --unless cancelBatchException
       --       void $ tryPutMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
@@ -232,7 +233,12 @@ scheduleJobsWith mkJob' Jobs {..} action = do
     prevCount <- atomicModifyIORefCAS jobsCountRef (\prev -> (prev + 1, prev))
     when (prevCount == 0) $ void $ takeMVar jobsSchedulerStatus
   void $ pushJQueue jobsQueue job
-
+  -- void $ liftIO $ tryTakeMVar jobsSchedulerStatus
+  -- count <- pushJQueue jobsQueue job
+  --liftIO $ sayString $ "Count: " ++ show count
+  -- (prevCount, notify) <- pushJQueue jobsQueue job
+  -- when (prevCount == 0) $ void $ liftIO $ takeMVar jobsSchedulerStatus
+  -- notify
 
 -- | Decrease a counter by one and perform an action when it drops down to zero.
 dropCounterOnZero :: MonadIO m => IORef Int -> m () -> m ()
@@ -282,11 +288,21 @@ runWorker :: MonadUnliftIO m => WorkerId -> Jobs m a -> m ()
 runWorker wId Jobs {jobsQueue, jobsSchedulerStatus} = go
    where
      go = do
-      (_, job) <- popJQueue jobsQueue
+      job <- popJQueue jobsQueue
       withRunInIO $ \run ->
-        catch (run (job wId)) $ \exc -> do
+        catch (run (void $ job wId)) $ \exc -> do
           unless (isSyncException exc) $ throwIO exc
           void $ tryPutMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
+      -- job <- popJQueue jobsQueue
+      -- withRunInIO $ \run -> do
+      --   eRes <- try (run (job wId))
+      --   --sayString $ show eRes
+      --   case eRes of
+      --     Left exc -> do
+      --       unless (isSyncException exc) $ throwIO exc
+      --       void $ tryPutMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
+      --     Right 0 -> void $ tryPutMVar jobsSchedulerStatus SchedulerIdle
+      --     Right _ -> pure ()
       go
 
 
