@@ -1,6 +1,7 @@
 {-# OPTIONS_HADDOCK hide, not-home #-}
-{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE NamedFieldPuns #-}
 -- |
 -- Module      : Control.Scheduler.Queue
 -- Copyright   : (c) Alexey Kuleshevich 2018-2019
@@ -19,18 +20,17 @@ module Control.Scheduler.Queue
   , newJQueue
   , pushJQueue
   , popJQueue
-  , flushJQueue
+  --, flushJQueue
   , clearPendingJQueue
   , readResults
   ) where
 
 import Control.Concurrent.MVar
-import Control.Monad (join, void)
+import Control.Monad (join)
 import Control.Monad.IO.Unlift
 import Data.Atomics (atomicModifyIORefCAS)
 import Data.Maybe
 import Data.IORef
-
 
 -- | A blocking unbounded queue that keeps the jobs in FIFO order and the results IORefs
 -- in reversed
@@ -56,11 +56,11 @@ newtype WorkerId = WorkerId
 popQueue :: Queue m a -> Maybe (Job m a, Queue m a)
 popQueue queue =
   case qQueue queue of
-    x:xs -> Just (x, queue {qCount = qCount queue - 1, qQueue = xs})
+    x:xs -> Just (x, queue {qQueue = xs})
     [] ->
       case reverse (qStack queue) of
         []   -> Nothing
-        y:ys -> Just (y, queue {qCount = qCount queue - 1, qQueue = ys, qStack = []})
+        y:ys -> Just (y, queue {qQueue = ys, qStack = []})
 
 data Job m a
   = Job {-# UNPACK #-} !(IORef (Maybe a)) (WorkerId -> m ())
@@ -85,49 +85,59 @@ newJQueue =
 pushJQueue :: MonadIO m => JQueue m a -> Job m a -> m Int
 pushJQueue (JQueue jQueueRef) job =
   liftIO $ do
-    newBaton <- newEmptyMVar
     join $
       atomicModifyIORefCAS
         jQueueRef
-        (\Queue {qCount, qQueue, qStack, qResults, qBaton} ->
-           ( Queue
-               (qCount + 1)
-               qQueue
-               (job : qStack)
-               (case job of
-                  Job resRef _ -> resRef : qResults
-                  _ -> qResults)
-               newBaton
-           , qCount <$ putMVar qBaton ()))
+        (\queue@Queue {qCount, qStack, qResults, qBaton} ->
+           let q =
+                 queue
+                   { qCount = qCount + 1
+                   , qStack = job : qStack
+                   , qResults =
+                       case job of
+                         Job resRef _ -> resRef : qResults
+                         _ -> qResults
+                   }
+            in (q, qCount <$ tryPutMVar qBaton ()))
 
--- | Pops an item from the queue. Also return current job count (without the popped element)
-popJQueue :: MonadIO m => JQueue m a -> m (Int, WorkerId -> m ())
+-- | Pops an item from the queue. The job returns the total job counts that is still left
+-- in the queue
+popJQueue :: MonadIO m => JQueue m a -> m (WorkerId -> m Int)
 popJQueue (JQueue jQueueRef) = liftIO inner
   where
-    inner =
+    dropCount =
+      liftIO $ atomicModifyIORefCAS jQueueRef $ \queue ->
+        let !newCount = qCount queue - 1
+         in (queue {qCount = newCount}, newCount)
+    inner = do
+      newBaton <- newEmptyMVar
       join $
-      atomicModifyIORefCAS jQueueRef $ \queue ->
-        case popQueue queue of
-          Nothing -> (queue, readMVar (qBaton queue) >> inner)
-          Just (job, newQueue) ->
-            ( newQueue
-            , case job of
-                Job _ action -> return (qCount newQueue, action)
-                Job_ action_ -> return (qCount newQueue, action_))
+        atomicModifyIORefCAS jQueueRef $ \queue ->
+          case popQueue queue of
+            Nothing -> (queue { qBaton = newBaton }, takeMVar newBaton >> inner)
+            Just (job, newQueue) ->
+              ( newQueue
+              , case job of
+                  Job _ action -> return (\wid -> action wid >> dropCount)
+                  Job_ action_ -> return (\wid -> action_ wid >> dropCount))
 
 
--- | Same as `clearPendingJQueue`, but returns the actual that are being removed.
-flushJQueue :: MonadIO m => JQueue m a -> m [Job m a]
-flushJQueue (JQueue queueRef) =
-  liftIO $ atomicModifyIORefCAS queueRef $ \queue ->
-    (queue {qCount = 0, qQueue = [], qStack = []}, qQueue queue ++ reverse (qStack queue))
+-- -- | Same as `clearPendingJQueue`, but returns the actual that are being removed.
+-- flushJQueue :: MonadIO m => JQueue m a -> m [Job m a]
+-- flushJQueue (JQueue queueRef) =
+--   liftIO $
+--   atomicModifyIORefCAS queueRef $ \queue ->
+--     let discarded = qQueue queue ++ reverse (qStack queue)
+--      in (queue {qCount = qCount queue - length discarded, qQueue = [], qStack = []}, discarded)
 
 -- | Clears any jobs that haven't been popped yet. Returns the number of jobs that have
 -- been removed
 clearPendingJQueue :: MonadIO m => JQueue m a -> m Int
 clearPendingJQueue (JQueue queueRef) =
-  liftIO $ atomicModifyIORefCAS queueRef $ \queue ->
-    (queue {qCount = 0, qQueue = [], qStack = []}, length (qQueue queue) + length (qStack queue))
+  liftIO $
+  atomicModifyIORefCAS queueRef $ \queue ->
+    let !discardCount = length (qQueue queue) + length (qStack queue)
+     in (queue {qCount = qCount queue - discardCount, qQueue = [], qStack = []}, discardCount)
 
 
 -- | Extracts all results available up to now, the uncomputed ones are discarded.
