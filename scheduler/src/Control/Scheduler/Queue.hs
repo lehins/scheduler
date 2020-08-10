@@ -82,7 +82,7 @@ newJQueue =
     return $ JQueue queueRef
 
 -- | Pushes an item onto a queue and returns the previous count.
-pushJQueue :: MonadIO m => JQueue m a -> Job m a -> m Int
+pushJQueue :: MonadIO m => JQueue m a -> Job m a -> m ()
 pushJQueue (JQueue jQueueRef) job =
   liftIO $ do
     newBaton <- newEmptyMVar
@@ -100,7 +100,7 @@ pushJQueue (JQueue jQueueRef) job =
                          _ -> qResults
                    , qBaton = newBaton
                    }
-            in (q, qCount <$ putMVar qBaton ()))
+            in (q, putMVar qBaton ()))
 
 -- | Pops an item from the queue. The job returns the total job counts that is still left
 -- in the queue
@@ -131,14 +131,14 @@ popJQueue (JQueue jQueueRef) = liftIO inner
 --     let discarded = qQueue queue ++ reverse (qStack queue)
 --      in (queue {qCount = qCount queue - length discarded, qQueue = [], qStack = []}, discarded)
 
--- | Clears any jobs that haven't been popped yet. Returns the number of jobs that have
--- been removed
+-- | Clears any jobs that haven't been popped yet. Returns the number of jobs that are in
+-- progress and have not been finished yet
 clearPendingJQueue :: MonadIO m => JQueue m a -> m Int
 clearPendingJQueue (JQueue queueRef) =
   liftIO $
   atomicModifyIORefCAS queueRef $ \queue ->
-    let !discardCount = length (qQueue queue) + length (qStack queue)
-     in (queue {qCount = qCount queue - discardCount, qQueue = [], qStack = []}, discardCount)
+    let !newCount = qCount queue - length (qQueue queue) + length (qStack queue)
+     in (queue {qCount = newCount, qQueue = [], qStack = []}, newCount)
 
 
 -- | Extracts all results available up to now, the uncomputed ones are discarded.

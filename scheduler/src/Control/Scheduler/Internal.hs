@@ -203,15 +203,15 @@ traverse_ :: (Applicative f, Foldable t) => (a -> f ()) -> t a -> f ()
 traverse_ f = F.foldl' (\c a -> c *> f a) (pure ())
 
 
-scheduleJobs :: MonadUnliftIO m => Jobs m a -> (WorkerId -> m a) -> m ()
+scheduleJobs :: MonadIO m => Jobs m a -> (WorkerId -> m a) -> m ()
 scheduleJobs = scheduleJobsWith mkJob
 
 -- | Ignores the result of computation, thus having less overhead.
-scheduleJobs_ :: MonadUnliftIO m => Jobs m a -> (WorkerId -> m b) -> m ()
+scheduleJobs_ :: MonadIO m => Jobs m a -> (WorkerId -> m b) -> m ()
 scheduleJobs_ = scheduleJobsWith (\job -> pure (Job_ (void . job (\_ -> pure ()))))
 
 scheduleJobsWith ::
-     MonadUnliftIO m
+     MonadIO m
   => (((b -> m ()) -> WorkerId -> m ()) -> m (Job m a))
   -> Jobs m a
   -> (WorkerId -> m b)
@@ -233,7 +233,7 @@ scheduleJobsWith mkJob' Jobs {..} action = do
   -- liftIO $ do
   --   prevCount <- atomicModifyIORefCAS jobsCountRef (\prev -> (prev + 1, prev))
   --   when (prevCount == 0) $ void $ takeMVar jobsSchedulerStatus
-  void $ pushJQueue jobsQueue job
+  pushJQueue jobsQueue job
   -- prevCount <- pushJQueue jobsQueue job
   -- when (prevCount == 0) $ void $ liftIO $ takeMVar jobsSchedulerStatus
 
@@ -244,17 +244,17 @@ scheduleJobsWith mkJob' Jobs {..} action = do
   -- when (prevCount == 0) $ void $ liftIO $ takeMVar jobsSchedulerStatus
   -- notify
 
--- | Decrease a counter by one and perform an action when it drops down to zero.
-dropCounterOnZero :: MonadIO m => IORef Int -> m () -> m ()
-dropCounterOnZero counterRef onZero = do
-  jc <-
-    liftIO $
-    atomicModifyIORefCAS
-      counterRef
-      (\ !i' ->
-         let !i = i' - 1
-          in (i, i))
-  when (jc == 0) onZero
+-- -- | Decrease a counter by one and perform an action when it drops down to zero.
+-- dropCounterOnZero :: MonadIO m => IORef Int -> m () -> m ()
+-- dropCounterOnZero counterRef onZero = do
+--   jc <-
+--     liftIO $
+--     atomicModifyIORefCAS
+--       counterRef
+--       (\ !i' ->
+--          let !i = i' - 1
+--           in (i, i))
+--   when (jc == 0) onZero
 
 
 -- -- | Runs the worker until it is terminated with an `WorkerTerminateException` or killed
@@ -321,19 +321,15 @@ initScheduler ::
 initScheduler comp submitWork collect = do
   jobsNumWorkers <- getCompWorkers comp
   jobsQueue <- newJQueue
-  jobsCountRef <- liftIO $ newIORef 0
   jobsSchedulerStatus <- liftIO $ newMVar SchedulerIdle
   earlyTerminationResultRef <- liftIO $ newIORef Nothing
   batchIdRef <- liftIO $ newIORef $ BatchId 0
   batchEarlyRef <- liftIO $ newIORef Nothing
-  jobsWaitingRef <- liftIO $ newIORef False
   let jobs =
         Jobs
           { jobsNumWorkers = jobsNumWorkers
           , jobsQueue = jobsQueue
-          , jobsCountRef = jobsCountRef
           , jobsSchedulerStatus = jobsSchedulerStatus
-          , jobsWaitingRef = jobsWaitingRef
           }
       bumpBatchId = liftIO $ atomicModifyIORefCAS_ (coerce batchIdRef) (+ (1 :: Int))
       scheduler =
@@ -351,27 +347,26 @@ initScheduler comp submitWork collect = do
                   writeIORef earlyTerminationResultRef $ Just finishEarly
                   throwIO TerminateEarlyException
           , _waitForBatch =
-              do status <- liftIO (readMVar jobsSchedulerStatus)
+              do _ <- liftIO $ takeMVar jobsSchedulerStatus
+                 -- \ indicate that all jobs have been submitted
+                 scheduleJobs_ jobs (\_ -> pure ())
+                 status <- liftIO (readMVar jobsSchedulerStatus)
                  mEarly <-
                    liftIO $ atomicModifyIORefCAS batchEarlyRef $ \mEarly -> (Nothing, mEarly)
                  case status of
-                   SchedulerWorkerException (WorkerException exc) -> liftIO $ throwIO exc
+                   SchedulerWorkerException (WorkerException exc) ->
+                     liftIO $ throwIO exc
                    SchedulerIdle -> collectResults mEarly . pure =<< collect jobsQueue
           , _earlyResults = liftIO (readIORef earlyTerminationResultRef)
           , _currentBatchId = liftIO (readIORef batchIdRef)
           , _batchEarly = liftIO (readIORef batchEarlyRef)
           , _cancelCurrentBatch =
               \early -> do
-                numJobsDiscarded <- clearPendingJQueue jobsQueue
+                numJobsInProgress <- clearPendingJQueue jobsQueue
                 liftIO $ writeIORef batchEarlyRef $ Just early
                 bumpBatchId
-                unless (numJobsDiscarded == 0) $
-                  liftIO $ do
-                    newCount <-
-                      atomicModifyIORefCAS jobsCountRef $ \count ->
-                        let !newCount = count - numJobsDiscarded
-                         in (newCount, newCount)
-                    when (newCount == 0) $ void $ tryPutMVar jobsSchedulerStatus SchedulerIdle
+                when (numJobsInProgress == 0) $
+                  liftIO $ void $ tryPutMVar jobsSchedulerStatus SchedulerIdle
           }
   pure (jobs, scheduler)
 
@@ -399,9 +394,10 @@ withSchedulerInternal comp submitWork collect onScheduler = do
             Left TerminateEarlyException ->
               run $ terminateWorkers tids >> readEarlyTermination
             Right _ -> do
-              --writeIORef jobsWaitingRef True
               _ <- takeMVar jobsSchedulerStatus -- indicate that all jobs have been submitted
               run $ scheduleJobs_ jobs (\_ -> pure ())
+              -- \ sentinel job. It protects against a case when all jobs have been
+              -- finished before `jobsSchedulerStatus` was cleared above
               schedulerStatus <- takeMVar jobsSchedulerStatus
               -- \ wait for all worker to finish. If any one of the workers had a problem, then
               -- this MVar will contain an exception

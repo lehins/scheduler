@@ -75,9 +75,7 @@ instance Traversable Results where
 data Jobs m a = Jobs
   { jobsNumWorkers      :: {-# UNPACK #-} !Int
   , jobsQueue           :: !(JQueue m a)
-  , jobsCountRef        :: !(IORef Int)
   , jobsSchedulerStatus :: !(MVar SchedulerStatus)
-  , jobsWaitingRef      :: !(IORef Bool)
   }
 
 
