@@ -221,7 +221,8 @@ scheduleJobsWith mkJob' Jobs {..} action = do
     mkJob' $ \storeResult wid -> do
       res <- action wid
       res `seq` storeResult res
-      dropCounterOnZero jobsCountRef $ liftIO $ void $ tryPutMVar jobsSchedulerStatus SchedulerIdle
+      --dropCounterOnZero jobsCountRef $ liftIO $ void $ tryPutMVar jobsSchedulerStatus SchedulerIdle
+
       -- withRunInIO $ \ run ->
       --   try (run (action wid)) >>= \case
       --     Left exc -> do
@@ -229,10 +230,13 @@ scheduleJobsWith mkJob' Jobs {..} action = do
       --       void $ tryPutMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
       --       throwIO exc
       --     Right res -> res `seq` run (storeResult res)
-  liftIO $ do
-    prevCount <- atomicModifyIORefCAS jobsCountRef (\prev -> (prev + 1, prev))
-    when (prevCount == 0) $ void $ takeMVar jobsSchedulerStatus
+  -- liftIO $ do
+  --   prevCount <- atomicModifyIORefCAS jobsCountRef (\prev -> (prev + 1, prev))
+  --   when (prevCount == 0) $ void $ takeMVar jobsSchedulerStatus
   void $ pushJQueue jobsQueue job
+  -- prevCount <- pushJQueue jobsQueue job
+  -- when (prevCount == 0) $ void $ liftIO $ takeMVar jobsSchedulerStatus
+
   -- void $ liftIO $ tryTakeMVar jobsSchedulerStatus
   -- count <- pushJQueue jobsQueue job
   --liftIO $ sayString $ "Count: " ++ show count
@@ -289,20 +293,20 @@ runWorker wId Jobs {jobsQueue, jobsSchedulerStatus} = go
    where
      go = do
       job <- popJQueue jobsQueue
-      withRunInIO $ \run ->
-        catch (run (void $ job wId)) $ \exc -> do
-          unless (isSyncException exc) $ throwIO exc
-          void $ tryPutMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
-      -- job <- popJQueue jobsQueue
-      -- withRunInIO $ \run -> do
-      --   eRes <- try (run (job wId))
-      --   --sayString $ show eRes
-      --   case eRes of
-      --     Left exc -> do
-      --       unless (isSyncException exc) $ throwIO exc
-      --       void $ tryPutMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
-      --     Right 0 -> void $ tryPutMVar jobsSchedulerStatus SchedulerIdle
-      --     Right _ -> pure ()
+      withRunInIO $ \run -> do
+        -- catch (run (void $ job wId)) $ \exc -> do
+        --   unless (isSyncException exc) $ throwIO exc
+        --   void $ tryPutMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
+        eRes <- try (run (job wId))
+        --sayString $ show eRes
+        --jobsWaiting <- readIORef jobsWaitingRef
+        --jobsWaiting <- liftIO $ isEmpty jobsSchedulerStatus
+        case eRes of
+          Left exc -> do
+            unless (isSyncException exc) $ throwIO exc
+            void $ putMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
+          Right 0 -> void $ tryPutMVar jobsSchedulerStatus SchedulerIdle
+          Right _ -> pure ()
       go
 
 
@@ -322,12 +326,14 @@ initScheduler comp submitWork collect = do
   earlyTerminationResultRef <- liftIO $ newIORef Nothing
   batchIdRef <- liftIO $ newIORef $ BatchId 0
   batchEarlyRef <- liftIO $ newIORef Nothing
+  jobsWaitingRef <- liftIO $ newIORef False
   let jobs =
         Jobs
           { jobsNumWorkers = jobsNumWorkers
           , jobsQueue = jobsQueue
           , jobsCountRef = jobsCountRef
           , jobsSchedulerStatus = jobsSchedulerStatus
+          , jobsWaitingRef = jobsWaitingRef
           }
       bumpBatchId = liftIO $ atomicModifyIORefCAS_ (coerce batchIdRef) (+ (1 :: Int))
       scheduler =
@@ -393,6 +399,9 @@ withSchedulerInternal comp submitWork collect onScheduler = do
             Left TerminateEarlyException ->
               run $ terminateWorkers tids >> readEarlyTermination
             Right _ -> do
+              --writeIORef jobsWaitingRef True
+              _ <- takeMVar jobsSchedulerStatus -- indicate that all jobs have been submitted
+              run $ scheduleJobs_ jobs (\_ -> pure ())
               schedulerStatus <- takeMVar jobsSchedulerStatus
               -- \ wait for all worker to finish. If any one of the workers had a problem, then
               -- this MVar will contain an exception

@@ -77,6 +77,7 @@ data Jobs m a = Jobs
   , jobsQueue           :: !(JQueue m a)
   , jobsCountRef        :: !(IORef Int)
   , jobsSchedulerStatus :: !(MVar SchedulerStatus)
+  , jobsWaitingRef      :: !(IORef Bool)
   }
 
 

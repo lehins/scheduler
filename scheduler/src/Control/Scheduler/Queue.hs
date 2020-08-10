@@ -90,7 +90,7 @@ pushJQueue (JQueue jQueueRef) job =
       atomicModifyIORefCAS
         jQueueRef
         (\queue@Queue {qCount, qStack, qResults, qBaton} ->
-           let q =
+           let !q =
                  queue
                    { qCount = qCount + 1
                    , qStack = job : qStack
@@ -111,16 +111,16 @@ popJQueue (JQueue jQueueRef) = liftIO inner
       liftIO $ atomicModifyIORefCAS jQueueRef $ \queue ->
         let !newCount = qCount queue - 1
          in (queue {qCount = newCount}, newCount)
-    inner = do
+    inner =
       join $
-        atomicModifyIORefCAS jQueueRef $ \queue ->
-          case popQueue queue of
-            Nothing -> (queue, readMVar (qBaton queue) >> inner)
-            Just (job, newQueue) ->
-              ( newQueue
-              , case job of
-                  Job _ action -> return (\wid -> action wid >> dropCount)
-                  Job_ action_ -> return (\wid -> action_ wid >> dropCount))
+      atomicModifyIORefCAS jQueueRef $ \queue ->
+        case popQueue queue of
+          Nothing -> (queue, readMVar (qBaton queue) >> inner)
+          Just (job, newQueue) ->
+            ( newQueue
+            , case job of
+                Job _ action -> return (\wid -> action wid >> dropCount)
+                Job_ action_ -> return (\wid -> action_ wid >> dropCount))
 
 
 -- -- | Same as `clearPendingJQueue`, but returns the actual that are being removed.
