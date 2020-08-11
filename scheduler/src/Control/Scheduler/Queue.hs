@@ -120,8 +120,10 @@ popJQueue (JQueue jQueueRef) = liftIO inner
           Just (job, newQueue) ->
             ( newQueue
             , case job of
-                Job _ action -> return (\wid -> action wid `safeFinally` dropCount)
-                Job_ action_ -> return (\wid -> action_ wid `safeFinally` dropCount))
+                -- Job _ action -> return (\wid -> action wid `safeFinally` dropCount)
+                -- Job_ action_ -> return (\wid -> action_ wid `safeFinally` dropCount))
+                Job _ action -> return (\wid -> action wid >> dropCount)
+                Job_ action_ -> return (\wid -> action_ wid >> dropCount))
 
 -- | Difference with `finally` is that we care about the result of the cleanup action,
 -- instead of the action itself.
