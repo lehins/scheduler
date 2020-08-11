@@ -20,12 +20,10 @@ module Control.Scheduler.Queue
   , newJQueue
   , pushJQueue
   , popJQueue
-  --, flushJQueue
   , clearPendingJQueue
   , readResults
   ) where
 
-import Control.Exception
 import Control.Concurrent.MVar
 import Control.Monad (join)
 import Control.Monad.IO.Unlift
@@ -109,7 +107,8 @@ popJQueue :: MonadUnliftIO m => JQueue m a -> m (WorkerId -> m Int)
 popJQueue (JQueue jQueueRef) = liftIO inner
   where
     dropCount =
-      liftIO $ atomicModifyIORefCAS jQueueRef $ \queue ->
+      liftIO $
+      atomicModifyIORefCAS jQueueRef $ \queue ->
         let !newCount = qCount queue - 1
          in (queue {qCount = newCount}, newCount)
     inner =
@@ -120,32 +119,8 @@ popJQueue (JQueue jQueueRef) = liftIO inner
           Just (job, newQueue) ->
             ( newQueue
             , case job of
-                -- Job _ action -> return (\wid -> action wid `safeFinally` dropCount)
-                -- Job_ action_ -> return (\wid -> action_ wid `safeFinally` dropCount))
                 Job _ action -> return (\wid -> action wid >> dropCount)
                 Job_ action_ -> return (\wid -> action_ wid >> dropCount))
-
--- | Difference with `finally` is that we care about the result of the cleanup action,
--- instead of the action itself.
-safeFinally ::
-     MonadUnliftIO m
-  => m a -- ^ computation to run first
-  -> m b -- ^ cleanup computation to run afterward (even if an exception was raised)
-  -> m b -- returns the value produced by the cleanup action
-safeFinally action final =
-  withRunInIO $ \run ->
-    mask $ \restore -> do
-      _ <- restore (run action) `onException` run final
-      run final
-
-
--- -- | Same as `clearPendingJQueue`, but returns the actual that are being removed.
--- flushJQueue :: MonadIO m => JQueue m a -> m [Job m a]
--- flushJQueue (JQueue queueRef) =
---   liftIO $
---   atomicModifyIORefCAS queueRef $ \queue ->
---     let discarded = qQueue queue ++ reverse (qStack queue)
---      in (queue {qCount = qCount queue - length discarded, qQueue = [], qStack = []}, discarded)
 
 -- | Clears any jobs that haven't been popped yet. Returns the number of jobs that are in
 -- progress and have not been finished yet
@@ -157,10 +132,12 @@ clearPendingJQueue (JQueue queueRef) =
      in (queue {qCount = newCount, qQueue = [], qStack = []}, newCount)
 
 
--- | Extracts all results available up to now, the uncomputed ones are discarded.
+-- | Extracts all results available up to now, the uncomputed ones are discarded. This
+-- also has an affect of resetting the total job count to zero.
 readResults :: MonadIO m => JQueue m a -> m [a]
 readResults (JQueue jQueueRef) =
   liftIO $ do
-    results <- atomicModifyIORef' jQueueRef $ \queue -> (queue { qResults = []}, qResults queue)
+    results <-
+      atomicModifyIORef' jQueueRef $ \queue -> (queue {qCount = 0, qResults = []}, qResults queue)
     rs <- mapM readIORef results
     return $ catMaybes rs

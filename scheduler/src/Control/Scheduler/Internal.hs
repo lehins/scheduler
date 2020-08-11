@@ -337,8 +337,8 @@ initScheduler comp submitWork collect = do
                    SchedulerWorkerException (WorkerException exc) ->
                      case fromException exc of
                        Just CancelBatchException -> do
+                         _ <- clearPendingJQueue jobsQueue
                          liftIO $ traverse_ (`throwTo` SomeAsyncException CancelBatchException) tids
-                         numJobsInProgress <- clearPendingJQueue jobsQueue
                          collectResults mEarly . pure =<< collect jobsQueue
                        Nothing -> liftIO $ throwIO exc
                    SchedulerIdle -> collectResults mEarly . pure =<< collect jobsQueue
@@ -350,8 +350,6 @@ initScheduler comp submitWork collect = do
                 liftIO $ writeIORef batchEarlyRef $ Just early
                 bumpBatchId
                 liftIO $ throwIO CancelBatchException
-                -- when (numJobsInProgress == 0) $
-                --   liftIO $ void $ tryPutMVar jobsSchedulerStatus SchedulerIdle
           }
   pure (jobs, mkScheduler)
 
@@ -388,10 +386,12 @@ withSchedulerInternal comp submitWork collect onScheduler = do
               -- this MVar will contain an exception
               run $ terminateWorkers tids
               case schedulerStatus of
-                SchedulerWorkerException (WorkerException exc) -> do
-                  case fromException exc of
-                    Just TerminateEarlyException -> run readEarlyTermination
-                    Nothing -> throwIO exc
+                SchedulerWorkerException (WorkerException exc)
+                  | Just TerminateEarlyException <- fromException exc -> run readEarlyTermination
+                  | Just CancelBatchException <- fromException exc -> run $ do
+                    mEarly <- _batchEarly scheduler
+                    collectResults mEarly (collect jobsQueue)
+                  | otherwise -> throwIO exc
                 -- \ Here we need to unwrap the legit worker exception and rethrow it, so
                 -- the main thread will think like it's his own
                 SchedulerIdle ->
