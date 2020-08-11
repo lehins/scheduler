@@ -33,6 +33,7 @@ import Control.Scheduler.Computation
 import Control.Scheduler.Queue
 import Data.IORef
 import Data.Primitive.SmallArray
+import Data.Primitive.PVar
 
 -- | Computed results of scheduled jobs.
 --
@@ -73,9 +74,10 @@ instance Traversable Results where
       FinishedEarlyWith x -> FinishedEarlyWith <$> f x
 
 data Jobs m a = Jobs
-  { jobsNumWorkers      :: {-# UNPACK #-} !Int
-  , jobsQueue           :: !(JQueue m a)
-  , jobsSchedulerStatus :: !(MVar SchedulerStatus)
+  { jobsNumWorkers       :: {-# UNPACK #-} !Int
+  , jobsQueue            :: !(JQueue m a)
+  , jobsQueueCount       :: !(PVar IO Int)
+  , jobsSchedulerStatus  :: !(MVar SchedulerStatus)
   }
 
 

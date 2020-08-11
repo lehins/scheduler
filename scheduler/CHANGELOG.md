@@ -1,3 +1,26 @@
+# 1.5.0
+
+* Despite that the major part of the version was bumped up, this release does not include
+  any breaking changes, only additions. However there are some important behavioral changes:
+
+  * Jobs will start being processed as soon as they are submitted, unlike it was before,
+    which only started doing work after the action to `withScheduler*` function has
+    finished submitting jobs. This fact does not affect the produced result of the
+    computation, just the potential order in which results are computed.
+  * Early temination is now implemented with the use of runtime exception, which shouldn't
+    interfere with normal operation unless `SomeException` is swallowed by the job doing
+    the early termination.
+* Addition of a batch concept with `BacthId` which:
+
+  * makes it possible for a `Scheduler` to be "resumable" with the help of `waitForBatch`,
+    `waitForBatch_` and `waitForBatchR`
+  * allows to cancel batches prematurely while keeping the results and not terminating the
+    scheduler itself. This can be done with new functions: `cancelBatch` and
+    `cancelBatchWith`. In order to check for batch status `getCurrentBatchId` and
+    `hasBatchFinished` functions can be used.
+
+* Addition of a `GlobalScheduler`
+
 # 1.4.2
 
 * Add `withTrivialScheduler`

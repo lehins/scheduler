@@ -123,9 +123,10 @@ prop_ReplicateWorkSeq i =
   concurrentProperty . replicateSeq (\ n g -> withScheduler Seq (\s -> replicateWork n s g)) i
 
 
-prop_ManyJobsInChunks :: Comp -> [[Int]] -> Property
-prop_ManyJobsInChunks comp jss =
-  concurrentExpectation $ do
+prop_ManyJobsInChunks :: Property
+prop_ManyJobsInChunks = noShrinking $ \ comp (jss :: [[Int]]) -> property $ do
+  --concurrentExpectation $ do
+  
     xs <- withScheduler comp $ \s ->
       forM_ jss $ \js -> do
         mapM_ (scheduleWork s . pure) js
@@ -419,21 +420,6 @@ prop_MutexException comp =
     withSchedulerWS_ state $ \schedulerWS ->
       scheduleWorkState_ schedulerWS $ \_s -> withSchedulerWS_ state $ \_s' -> pure ()
 
--- prop_CancelBatchAndResume :: Comp -> Int -> ([Int], [Int]) -> [Int] -> [Int] -> Property
--- prop_CancelBatchAndResume comp x' (xs1, xs2) ys zs =
---   concurrentPropertyIO $ do
---     res <-
---       withScheduler comp $ \s -> do
---         batchId <- getCurrentBatchId s
---         forM_ (concat [xs1, [x'], xs2]) $ \x -> scheduleWork s $ do
---           hasFinished <- hasBatchFinished s batchId
---           if hasFinished then pure Nothing $ do
---             if x == x'
---               then x <$ cancelBatchWith s x
---               else pure x
---         waitForBatchR s `shouldReturn` x'
---     pure (res === zs)
-
 prop_FindCancelResume :: Comp -> Int64 -> ([Int64], [Int64]) -> [Int64] -> Property
 prop_FindCancelResume comp x' (xs1', xs2') ys =
   concurrentExpectation $ do
@@ -474,6 +460,37 @@ prop_FindCancelResume comp x' (xs1', xs2') ys =
     orderedPartialPrefixOf (a:as) (b:bs)
       | a == b = orderedPartialPrefixOf as bs
       | otherwise = orderedPartialPrefixOf (a : as) bs
+
+-- prop_CancelBatchEarly_ :: NonSeq -> Property
+-- prop_CancelBatchEarly_ (NonSeq comp) =
+--   concurrentPropertyIO $ do
+--     ref <- newIORef True
+--     withScheduler_ comp $ \scheduler ->
+--       scheduleWork_
+--         scheduler
+--         (cancelBatch_ scheduler >> yield >> threadDelay 10000 >> writeIORef ref False)
+--     counterexample "Scheduler did not terminate early" <$> readIORef ref
+
+-- prop_FinishEarly :: Comp -> Property
+-- prop_FinishEarly comp =
+--   concurrentPropertyIO $ do
+--     let scheduleJobs scheduler = do
+--           scheduleWork scheduler (pure (2 :: Int))
+--           scheduleWork scheduler (threadDelay 10000 >> terminate scheduler 3 >> pure 1)
+--     res <- withScheduler comp scheduleJobs
+--     res' <- withSchedulerR comp scheduleJobs
+--     pure (res === [2, 3] .&&. res' === FinishedEarly [2] 3)
+
+-- prop_FinishEarlyWith :: Comp -> Int -> Property
+-- prop_FinishEarlyWith comp n =
+--   concurrentPropertyIO $ do
+--     let scheduleJobs scheduler = do
+--           scheduleWork scheduler $ pure (complement (n + 1))
+--           scheduleWork scheduler $ terminateWith scheduler n >> pure (complement n)
+--     res <- withScheduler comp scheduleJobs
+--     res' <- withSchedulerR comp scheduleJobs
+--     pure (res === [n] .&&. res' === FinishedEarlyWith n)
+
 
 spec :: Spec
 spec = do
@@ -572,8 +589,6 @@ spec = do
   describe "Restartable" $ do
     prop "ManyJobsInChunks" prop_ManyJobsInChunks
     prop "FindCancelResume" prop_FindCancelResume
-    -- prop "CancelBatchAndResume" $ prop_CancelBatchAndResume
-    -- prop "ManyJobsStoppedEarly" prop_ManyJobsStoppedEarly
 
 instance Arbitrary WorkerId where
   arbitrary = WorkerId <$> arbitrary

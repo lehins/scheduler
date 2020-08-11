@@ -35,13 +35,16 @@ module Control.Scheduler
   , scheduleWorkState_
   , replicateWork
   -- * Batches
+  , BatchId
   , waitForBatch
   , waitForBatch_
   , waitForBatchR
   , getCurrentBatchId
   , cancelBatch
+  , cancelBatch_
   , cancelBatchWith
   , hasBatchFinished
+  -- * Early termination
   , terminate
   , terminate_
   , terminateWith
@@ -171,7 +174,9 @@ numWorkers = _numWorkers
 
 
 -- | Schedule an action to be picked up and computed by a worker from a pool of
--- jobs. Argument supplied to the job will be the id of the worker doing the job.
+-- jobs. Argument supplied to the job will be the id of the worker doing the job. This is
+-- useful for identification of a thread that will be doing the work, since there is
+-- one-to-one mapping from `ThreadId` to `WorkerId`.
 --
 -- @since 1.2.0
 scheduleWorkId :: Scheduler m a -> (WorkerId -> m a) -> m ()
@@ -179,8 +184,8 @@ scheduleWorkId =_scheduleWorkId
 
 -- | As soon as possible try to terminate any computation that is being performed by all
 -- workers managed by this scheduler and collect whatever results have been computed, with
--- supplied element guaranteed to being the last one. In case when `Results` is the return
--- type this function will cause the scheduler to produce `FinishedEarly`
+-- supplied element guaranteed to being the last one. In case when `Results` type is
+-- returned this function will cause the scheduler to produce `FinishedEarly`
 --
 -- /Important/ - With `Seq` strategy this will not stop other scheduled tasks from being computed,
 -- although it will make sure their results are discarded.
@@ -368,32 +373,45 @@ withScheduler_ comp = void . withSchedulerInternal comp scheduleJobs_ (const (pu
 -- returns, but if any of the jobs resulted in an exception it will be rethrown by this
 -- function, which will also put the scheduler in a terminated state.
 --
--- @since 1.4.3
+-- @since 1.5.0
 waitForBatch :: Functor m => Scheduler m a -> m [a]
 waitForBatch Scheduler {_waitForBatch} = reverse . resultsToList <$> _waitForBatch
 
 -- | Same as `waitForBatch` but discard the results
 --
--- @since 1.4.3
+-- @since 1.5.0
 waitForBatch_ :: Monad m => Scheduler m a -> m ()
 waitForBatch_ Scheduler {_waitForBatch} = void _waitForBatch
 
 -- | Same as `waitForBatch`, but returns the actual `Results` data type.
 --
--- @since 1.4.3
+-- @since 1.5.0
 waitForBatchR :: Functor m => Scheduler m a -> m (Results a)
 waitForBatchR Scheduler {_waitForBatch} = reverseResults <$> _waitForBatch
 
 
+--
+-- @since 1.5.0
 getCurrentBatchId :: Scheduler m a -> m BatchId
 getCurrentBatchId = _currentBatchId
 
+--
+-- @since 1.5.0
 cancelBatch :: Scheduler m a -> a -> m ()
 cancelBatch scheduler a = _cancelCurrentBatch scheduler (Early a)
 
+--
+-- @since 1.5.0
+cancelBatch_ :: Scheduler m () -> m ()
+cancelBatch_ scheduler = _cancelCurrentBatch scheduler (Early ())
+
+--
+-- @since 1.5.0
 cancelBatchWith :: Scheduler m a -> a -> m ()
 cancelBatchWith scheduler a = _cancelCurrentBatch scheduler (EarlyWith a)
 
+--
+-- @since 1.5.0
 hasBatchFinished :: Functor m => Scheduler m a -> BatchId -> m Bool
 hasBatchFinished scheduler batchId = (batchId /=) <$> _currentBatchId scheduler
 
