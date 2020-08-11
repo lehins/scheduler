@@ -27,13 +27,11 @@ import Data.IORef
 newGlobalScheduler :: MonadIO m => Comp -> m GlobalScheduler
 newGlobalScheduler comp =
   liftIO $ do
-    (jobs, scheduler) <- initScheduler comp scheduleJobs_ (const (pure []))
-    ref <- newIORef scheduler
-    GlobalScheduler ref <$
-      safeBracketOnError
-        (spawnWorkers jobs comp)
-        terminateWorkers
-        (mkWeakIORef ref . terminateWorkers)
+    (jobs, mkScheduler) <- initScheduler comp scheduleJobs_ (const (pure []))
+    safeBracketOnError (spawnWorkers jobs comp) terminateWorkers $ \tids -> do
+      ref <- newIORef $ mkScheduler tids
+      GlobalScheduler ref <$ mkWeakIORef ref (terminateWorkers tids)
+
 
 
 waitForBatchGS :: MonadIO m => GlobalScheduler -> m ()

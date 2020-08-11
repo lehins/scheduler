@@ -271,6 +271,7 @@ runWorker run unmask wId Jobs {jobsQueue, jobsSchedulerStatus} = go
     go = do
       eRes <- try (run (popJQueue jobsQueue) >>= \job -> unmask (run (job wId)))
       -- \ popJQueue can block, but we are interruptable here
+      -- sayString $ "Worker: " ++ show wId ++ " got result: " ++ show eRes
       case eRes of
         Right 0 -> tryPutMVar jobsSchedulerStatus SchedulerIdle >> go
         Right _ -> go
@@ -297,7 +298,7 @@ initScheduler ::
   => Comp
   -> (Jobs m a -> (WorkerId -> m a) -> m ())
   -> (JQueue m a -> m [a])
-  -> m (Jobs m a, Scheduler m a)
+  -> m (Jobs m a, [ThreadId] -> Scheduler m a)
 initScheduler comp submitWork collect = do
   jobsNumWorkers <- getCompWorkers comp
   jobsQueue <- newJQueue
@@ -312,7 +313,7 @@ initScheduler comp submitWork collect = do
           , jobsSchedulerStatus = jobsSchedulerStatus
           }
       bumpBatchId = liftIO $ atomicModifyIORefCAS_ (coerce batchIdRef) (+ (1 :: Int))
-      scheduler =
+      mkScheduler tids =
         Scheduler
           { _numWorkers = jobsNumWorkers
           , _scheduleWorkId = submitWork jobs
@@ -335,20 +336,26 @@ initScheduler comp submitWork collect = do
                    liftIO $ atomicModifyIORefCAS batchEarlyRef $ \mEarly -> (Nothing, mEarly)
                  case status of
                    SchedulerWorkerException (WorkerException exc) ->
-                     liftIO $ throwIO exc
+                     case fromException exc of
+                       Just CancelBatchException -> do
+                         liftIO $ traverse_ (`throwTo` SomeAsyncException CancelBatchException) tids
+                         numJobsInProgress <- clearPendingJQueue jobsQueue
+                         --sayString $ "Number of jobs left: " ++ show numJobsInProgress
+                         collectResults mEarly . pure =<< collect jobsQueue
+                       Nothing -> liftIO $ throwIO exc
                    SchedulerIdle -> collectResults mEarly . pure =<< collect jobsQueue
           , _earlyResults = liftIO (readIORef earlyTerminationResultRef)
           , _currentBatchId = liftIO (readIORef batchIdRef)
           , _batchEarly = liftIO (readIORef batchEarlyRef)
           , _cancelCurrentBatch =
               \early -> do
-                numJobsInProgress <- clearPendingJQueue jobsQueue
                 liftIO $ writeIORef batchEarlyRef $ Just early
                 bumpBatchId
-                when (numJobsInProgress == 0) $
-                  liftIO $ void $ tryPutMVar jobsSchedulerStatus SchedulerIdle
+                liftIO $ throwIO CancelBatchException
+                -- when (numJobsInProgress == 0) $
+                --   liftIO $ void $ tryPutMVar jobsSchedulerStatus SchedulerIdle
           }
-  pure (jobs, scheduler)
+  pure (jobs, mkScheduler)
 
 
 withSchedulerInternal ::
@@ -360,33 +367,38 @@ withSchedulerInternal ::
      -- ^ Action that will be scheduling all the work.
   -> m (Results a)
 withSchedulerInternal comp submitWork collect onScheduler = do
-  (jobs@Jobs {..}, scheduler) <- initScheduler comp submitWork collect
+  (jobs@Jobs {..}, mkScheduler) <- initScheduler comp submitWork collect
   -- / Wait for the initial jobs to get scheduled before spawining off the workers, otherwise it
   -- would be trickier to identify the beginning and the end of a job pool.
-  let readEarlyTermination =
-        _earlyResults scheduler >>= \case
-          Nothing -> error "Impossible: uninitialized early termination value"
-          Just rs -> pure rs
-      doWork tids =
-        withRunInIO $ \run -> do
+  safeBracketOnError (spawnWorkers jobs comp) terminateWorkers $ \tids ->
+    let scheduler = mkScheduler tids
+        readEarlyTermination =
+          _earlyResults scheduler >>= \case
+            Nothing -> error "Impossible: uninitialized early termination value"
+            Just rs -> pure rs
+     in withRunInIO $ \run -> do
           eEarlyTermination <- try (run (onScheduler scheduler))
           case eEarlyTermination of
-            Left TerminateEarlyException ->
-              run $ terminateWorkers tids >> readEarlyTermination
+            Left TerminateEarlyException -> run $ terminateWorkers tids >> readEarlyTermination
             Right _ -> do
+              --sayString "Done waiting. Starting final"
               _ <- takeMVar jobsSchedulerStatus -- indicate that all jobs have been submitted
-              run $ scheduleJobs_ jobs (\_ -> pure ())
+              run $ scheduleJobs_ jobs (\_ -> pure ()) --sayString "Ran final job")
               -- \ sentinel job. It protects against a case when all jobs have been
               -- finished before `jobsSchedulerStatus` was cleared above
+              --sayString "Blocking on final"
               schedulerStatus <- takeMVar jobsSchedulerStatus
               -- \ wait for all worker to finish. If any one of the workers had a problem, then
               -- this MVar will contain an exception
+              --sayString "Terminating"
               run $ terminateWorkers tids
               case schedulerStatus of
-                SchedulerWorkerException (WorkerException exc) -> do
-                  case fromException exc of
-                    Just TerminateEarlyException -> run readEarlyTermination
-                    Nothing -> throwIO exc
+                SchedulerWorkerException (WorkerException exc)
+                  | Just TerminateEarlyException <- fromException exc -> run readEarlyTermination
+                  | Just CancelBatchException <- fromException exc -> run $ do
+                    mEarly <- _batchEarly scheduler
+                    collectResults mEarly (collect jobsQueue)
+                  | otherwise -> throwIO exc
                 -- \ Here we need to unwrap the legit worker exception and rethrow it, so
                 -- the main thread will think like it's his own
                 SchedulerIdle ->
@@ -395,7 +407,6 @@ withSchedulerInternal comp submitWork collect onScheduler = do
                     collectResults mEarly (collect jobsQueue)
                 -- \ Now we are sure all workers have done their job we can safely read
                 -- all of the IORefs with results
-  safeBracketOnError (spawnWorkers jobs comp) terminateWorkers doWork
 
 
 collectResults :: Applicative f => Maybe (Early a) -> f [a] -> f (Results a)
@@ -458,6 +469,7 @@ safeBracketOnError before after thing =
           _ :: Either SomeException b <- try $ uninterruptibleMask_ $ run $ after x
           throwIO e1
         Right y -> return y
+
 
 isSyncException :: Exception e => e -> Bool
 isSyncException exc =

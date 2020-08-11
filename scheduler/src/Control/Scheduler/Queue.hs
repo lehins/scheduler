@@ -25,6 +25,7 @@ module Control.Scheduler.Queue
   , readResults
   ) where
 
+import Control.Exception
 import Control.Concurrent.MVar
 import Control.Monad (join)
 import Control.Monad.IO.Unlift
@@ -104,7 +105,7 @@ pushJQueue (JQueue jQueueRef) job =
 
 -- | Pops an item from the queue. The job returns the total job counts that is still left
 -- in the queue
-popJQueue :: MonadIO m => JQueue m a -> m (WorkerId -> m Int)
+popJQueue :: MonadUnliftIO m => JQueue m a -> m (WorkerId -> m Int)
 popJQueue (JQueue jQueueRef) = liftIO inner
   where
     dropCount =
@@ -119,8 +120,21 @@ popJQueue (JQueue jQueueRef) = liftIO inner
           Just (job, newQueue) ->
             ( newQueue
             , case job of
-                Job _ action -> return (\wid -> action wid >> dropCount)
-                Job_ action_ -> return (\wid -> action_ wid >> dropCount))
+                Job _ action -> return (\wid -> action wid `safeFinally` dropCount)
+                Job_ action_ -> return (\wid -> action_ wid `safeFinally` dropCount))
+
+-- | Difference with `finally` is that we care about the result of the cleanup action,
+-- instead of the action itself.
+safeFinally ::
+     MonadUnliftIO m
+  => m a -- ^ computation to run first
+  -> m b -- ^ cleanup computation to run afterward (even if an exception was raised)
+  -> m b -- returns the value produced by the cleanup action
+safeFinally action final =
+  withRunInIO $ \run ->
+    mask $ \restore -> do
+      _ <- restore (run action) `onException` run final
+      run final
 
 
 -- -- | Same as `clearPendingJQueue`, but returns the actual that are being removed.
