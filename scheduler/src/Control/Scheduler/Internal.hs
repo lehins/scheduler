@@ -257,58 +257,38 @@ scheduleJobsWith mkJob' Jobs {..} action = do
 --   when (jc == 0) onZero
 
 
--- -- | Runs the worker until it is terminated with an `WorkerTerminateException` or killed
--- -- by some other asynchronous exception.
--- runWorker ::
---      MonadUnliftIO m
---   => (forall b. m b -> IO b)
---   -> (forall c. IO c -> IO c)
---   -> WorkerId
---   -> Jobs m a
---   -> m ()
--- runWorker run unmask wId Jobs {jobsQueue, jobsCountRef, jobsSchedulerStatus} = liftIO go
---   where
---     workerIteration =
---       bracket
---         (run (popJQueue jobsQueue))
---         (\_ ->
---            dropCounterOnZero jobsCountRef $
---            liftIO $ void $ tryPutMVar jobsSchedulerStatus SchedulerIdle)
---         (\(_, job) -> run $ job wId)
---     go = do
---       catch (unmask workerIteration) $ \exc -> do
---         case asyncExceptionFromException exc of
---           Just WorkerTerminateException -> return ()
---           Nothing -> do
---             void $ tryPutMVar jobsSchedulerStatus $ SchedulerWorkerException $ WorkerException exc
---             unless (isSyncException exc) $
---               case asyncExceptionFromException exc of
---                 Just CancelBatchException -> return ()
---                 Nothing -> throwIO exc
---             go
-
-
-runWorker :: MonadUnliftIO m => WorkerId -> Jobs m a -> m ()
-runWorker wId Jobs {jobsQueue, jobsSchedulerStatus} = go
-   where
-     go = do
-      job <- popJQueue jobsQueue
-      withRunInIO $ \run -> do
-        -- catch (run (void $ job wId)) $ \exc -> do
-        --   unless (isSyncException exc) $ throwIO exc
-        --   void $ tryPutMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
-        eRes <- try (run (job wId))
-        --sayString $ show eRes
-        --jobsWaiting <- readIORef jobsWaitingRef
-        --jobsWaiting <- liftIO $ isEmpty jobsSchedulerStatus
-        case eRes of
-          Left exc -> do
-            unless (isSyncException exc) $ throwIO exc
-            void $ putMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
-          Right 0 -> void $ tryPutMVar jobsSchedulerStatus SchedulerIdle
-          Right _ -> pure ()
-      go
-
+-- | Runs the worker until it is terminated with an `WorkerTerminateException` or killed
+-- by some other asynchronous exception.
+runWorker ::
+     MonadUnliftIO m
+  => (forall b. m b -> IO b)
+  -> (forall c. IO c -> IO c)
+  -> WorkerId
+  -> Jobs m a
+  -> IO ()
+runWorker run unmask wId Jobs {jobsQueue, jobsSchedulerStatus} = go
+  where
+    go = do
+      eRes <- try (run (popJQueue jobsQueue) >>= \job -> unmask (run (job wId)))
+      -- \ popJQueue can block, but we are interruptable here
+      case eRes of
+        Right 0 -> tryPutMVar jobsSchedulerStatus SchedulerIdle >> go
+        Right _ -> go
+        Left exc
+          | Just WorkerTerminateException <- asyncExceptionFromException exc -> return ()
+        Left exc
+          | Just CancelBatchException <- asyncExceptionFromException exc -> go
+        Left exc -> do
+          eUnblocked <-
+            try $ putMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
+          unless (isSyncException exc) $ throwIO exc
+          case eUnblocked of
+            Right () -> go
+            Left uExc
+              | Just WorkerTerminateException <- asyncExceptionFromException uExc -> return ()
+            Left uExc
+              | Just CancelBatchException <- asyncExceptionFromException uExc -> go
+            Left uExc -> throwIO uExc
 
 
 
@@ -443,8 +423,7 @@ spawnWorkers jobs@Jobs {jobsNumWorkers} =
     spawnWorkersWith fork ws =
       withRunInIO $ \run ->
         forM (zip [0 ..] ws) $ \(wId, on) ->
-          fork on $ \unmask -> --run $ runWorker run unmask wId jobs
-            catch (unmask $ run $ runWorker wId jobs) (run . handleWorkerException jobs)
+          fork on $ \unmask -> runWorker run unmask wId jobs
 
 terminateWorkers :: MonadIO m => [ThreadId] -> m ()
 terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
@@ -464,19 +443,6 @@ reverseResults = \case
   FinishedEarly rs r -> FinishedEarly (reverse rs) r
   res -> res
 
-
--- | Specialized exception handler for the work scheduler.
-handleWorkerException :: MonadIO m => Jobs m a -> SomeException -> m ()
-handleWorkerException Jobs {jobsSchedulerStatus} exc = do
-  case asyncExceptionFromException exc of
-    Just WorkerTerminateException -> return ()
-      -- \ in a process of worker termination
-      --  --------------------------------------------------------
-    _ ->
-      liftIO $ do
-        void $ tryPutMVar jobsSchedulerStatus $ SchedulerWorkerException $ WorkerException exc
-        unless (isSyncException exc) $ throwIO exc
-        -- \ Main thread must know how we died and if it was async exception, rethrow it.
 
 
 -- Copies from unliftio
