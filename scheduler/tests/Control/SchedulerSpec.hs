@@ -124,9 +124,8 @@ prop_ReplicateWorkSeq i =
 
 
 prop_ManyJobsInChunks :: Property
-prop_ManyJobsInChunks = noShrinking $ \ comp (jss :: [[Int]]) -> property $ do
-  --concurrentExpectation $ do
-  
+prop_ManyJobsInChunks = noShrinking $ \ comp (jss :: [[Int]]) ->
+  concurrentExpectation $ do
     xs <- withScheduler comp $ \s ->
       forM_ jss $ \js -> do
         mapM_ (scheduleWork s . pure) js
