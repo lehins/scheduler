@@ -7,10 +7,12 @@
 -- Portability : non-portable
 --
 module Control.Scheduler.Global
-  ( GlobalScheduler
+  ( -- * This module is still experimental and the API is likely to change.
+    GlobalScheduler
   , newGlobalScheduler
   , waitForBatchGS
   , cancelBatchGS
+  , getCurrentBatchIdGS
   , hasBatchFinishedGS
   , scheduleWorkGS
   ) where
@@ -41,6 +43,9 @@ cancelBatchGS :: MonadIO m => GlobalScheduler -> m ()
 cancelBatchGS (GlobalScheduler ref) =
   liftIO $ readIORef ref >>= \ scheduler -> _cancelCurrentBatch scheduler (Early ())
 
+
+getCurrentBatchIdGS :: MonadIO m => GlobalScheduler -> m BatchId
+getCurrentBatchIdGS (GlobalScheduler ref) = liftIO $ readIORef ref >>= _currentBatchId
 
 hasBatchFinishedGS :: MonadIO m => GlobalScheduler -> BatchId -> m Bool
 hasBatchFinishedGS (GlobalScheduler ref) batchId =
