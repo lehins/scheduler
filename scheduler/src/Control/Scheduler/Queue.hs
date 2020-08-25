@@ -23,10 +23,10 @@ module Control.Scheduler.Queue
   , popJQueue
   , clearPendingJQueue
   , readResults
-  , timeoutErr
+  , blockPopJQueue
+  , unblockPopJQueue
   ) where
 
-import System.Timeout
 import Control.Concurrent.MVar
 import Control.Monad (join)
 import Control.Monad.IO.Unlift
@@ -40,7 +40,7 @@ data Queue m a = Queue
   { qQueue   :: ![Job m a]
   , qStack   :: ![Job m a]
   , qResults :: ![IORef (Maybe a)]
-  , qBaton   :: {-# UNPACK #-} !(MVar ())
+  , qBaton   :: {-# UNPACK #-}!(MVar ())
   }
 
 
@@ -73,63 +73,71 @@ mkJob action = do
   resRef <- liftIO $ newIORef Nothing
   return $! Job resRef (action (liftIO . writeIORef resRef . Just))
 
-newtype JQueue m a = JQueue (IORef (Queue m a))
+data JQueue m a =
+  JQueue
+    { jqQueueRef :: {-# UNPACK #-}!(IORef (Queue m a))
+    , jqLock     :: {-# UNPACK #-}!(MVar ())
+    }
 
 newJQueue :: MonadIO m => m (JQueue m a)
 newJQueue =
   liftIO $ do
+    newLock <- newEmptyMVar
     newBaton <- newEmptyMVar
     queueRef <- newIORef (Queue [] [] [] newBaton)
-    return $ JQueue queueRef
+    return $ JQueue queueRef newLock
 
 -- | Pushes an item onto a queue and returns the previous count.
 pushJQueue :: MonadIO m => JQueue m a -> Job m a -> m ()
-pushJQueue (JQueue jQueueRef) job =
+pushJQueue (JQueue jQueueRef _) job =
   liftIO $ do
     newBaton <- newEmptyMVar
-    baton <- atomicModifyIORefCAS
-        jQueueRef
-        (\queue@Queue {qStack, qResults, qBaton} ->
-           let !q' =
-                 queue
-                   { qResults =
-                       case job of
-                         Job resRef _ -> resRef : qResults
-                         _ -> qResults
-                   , qBaton = newBaton
-
-                   , qStack = job : qStack
-                   }
-            in (q', qBaton))
-    putMVar baton ()
+    join $
+      atomicModifyIORefCAS jQueueRef $ \queue@Queue {qStack, qResults, qBaton} ->
+        ( queue
+            { qResults =
+                case job of
+                  Job resRef _ -> resRef : qResults
+                  _ -> qResults
+            , qStack = job : qStack
+            , qBaton = newBaton
+            }
+        , putMVar qBaton ())
 
 -- | Pops an item from the queue. The job returns the total job counts that is still left
 -- in the queue
 popJQueue :: MonadUnliftIO m => JQueue m a -> m (WorkerId -> m ())
-popJQueue (JQueue jQueueRef) = liftIO inner
+popJQueue (JQueue jQueueRef lock) = liftIO inner
   where
-    inner =
+    inner = do
+      readMVar lock
       join $
-      atomicModifyIORefCAS jQueueRef $ \queue ->
-        case popQueue queue of
-          Nothing -> (queue, readMVar (qBaton queue) >> inner)
-          Just (job, newQueue) ->
-            ( newQueue
-            , case job of
-                Job _ action -> return action
-                Job_ action_ -> return action_)
+        atomicModifyIORefCAS jQueueRef $ \queue@Queue {qBaton} ->
+          case popQueue queue of
+            Nothing -> (queue, readMVar qBaton >> inner)
+            Just (job, newQueue) ->
+              ( newQueue
+              , case job of
+                  Job _ action -> return action
+                  Job_ action_ -> return action_)
+
+unblockPopJQueue :: MonadIO m => JQueue m a -> m ()
+unblockPopJQueue (JQueue _ lock) = liftIO $ putMVar lock ()
+
+blockPopJQueue :: MonadIO m => JQueue m a -> m ()
+blockPopJQueue (JQueue _ lock) = liftIO $ takeMVar lock
 
 -- | Clears any jobs that haven't been started yet. Returns the number of jobs that are
 -- still in progress and have not been yet been completed.
 clearPendingJQueue :: MonadIO m => JQueue m a -> m ()
-clearPendingJQueue (JQueue queueRef) =
+clearPendingJQueue (JQueue queueRef _) =
   liftIO $ atomicModifyIORefCAS_ queueRef $ \queue -> (queue {qQueue = [], qStack = []})
 
 
 -- | Extracts all results available up to now, the uncomputed ones are discarded. This
 -- also has an affect of resetting the total job count to zero.
 readResults :: MonadIO m => JQueue m a -> m [a]
-readResults (JQueue jQueueRef) =
+readResults (JQueue jQueueRef _) =
   liftIO $ do
     results <-
       atomicModifyIORefCAS jQueueRef $ \queue ->
@@ -138,9 +146,3 @@ readResults (JQueue jQueueRef) =
     return $ catMaybes rs
 
 
-
-timeoutErr :: MonadIO m => String -> IO b -> m b
-timeoutErr name action = liftIO (timeout t action) >>= \case
-  Just a -> pure a
-  Nothing -> error $ "<" ++ name ++ "> Timed out after: " ++ show t
-  where t = 800000

@@ -245,7 +245,9 @@ runWorker run unmask wId Jobs {jobsQueue, jobsQueueCount, jobsSchedulerStatus} =
           | Just CancelBatchException <- asyncExceptionFromException uExc -> go
         Left uExc -> throwIO uExc
     go = do
-      eRes <- try (run (popJQueue jobsQueue) >>= \job -> unmask (run (job wId) >> dropCount))
+      eRes <- try $ do
+        job <- run (popJQueue jobsQueue)
+        unmask (run (job wId) >> dropCount)
       -- \ popJQueue can block, but it is still interruptable
       case eRes of
         Right 1 -> try (putMVar jobsSchedulerStatus SchedulerIdle) >>= onBlockedMVar
@@ -273,7 +275,7 @@ initScheduler ::
 initScheduler comp submitWork collect = do
   jobsNumWorkers <- getCompWorkers comp
   jobsQueue <- newJQueue
-  jobsQueueCount <- liftIO $ newPVar 1
+  jobsQueueCount <- liftIO $ newPVar 0
   jobsSchedulerStatus <- liftIO newEmptyMVar
   earlyTerminationResultRef <- liftIO $ newIORef Nothing
   batchIdRef <- liftIO $ newIORef $ BatchId 0
@@ -301,9 +303,9 @@ initScheduler comp submitWork collect = do
                   writeIORef earlyTerminationResultRef $ Just finishEarly
                   throwIO TerminateEarlyException
           , _waitForBatch =
-              do scheduleJobs_ jobs (\_ -> liftIO $ void $ atomicSubIntPVar jobsQueueCount 1)
-                 -- \ A job that decreases job count twice as above indicates that the scheduler
-                 --  \ is blocked and waiting for results.
+              do count <- liftIO $ atomicReadIntPVar jobsQueueCount
+                 when (count == 0) $ scheduleJobs_ jobs (\_ -> pure ())
+                 unblockPopJQueue jobsQueue
                  status <- liftIO $ takeMVar jobsSchedulerStatus
                  mEarly <- liftIO $ atomicModifyIORef' batchEarlyRef $ \mEarly -> (Nothing, mEarly)
                  rs <-
@@ -317,15 +319,17 @@ initScheduler comp submitWork collect = do
                            collectResults mEarly . pure =<< collect jobsQueue
                          Nothing -> liftIO $ throwIO exc
                      SchedulerIdle -> do
+                       blockPopJQueue jobsQueue
                        liftIO bumpBatchId
                        res <- collect jobsQueue
                        res `seq` collectResults mEarly (pure res)
-                 rs <$ liftIO (atomicWriteIntPVar jobsQueueCount 1)
+                 rs <$ liftIO (atomicWriteIntPVar jobsQueueCount 0)
           , _earlyResults = liftIO (readIORef earlyTerminationResultRef)
           , _currentBatchId = liftIO (readIORef batchIdRef)
           , _batchEarly = liftIO (readIORef batchEarlyRef)
           , _cancelCurrentBatch =
-              \early ->
+              \early -> do
+                blockPopJQueue jobsQueue
                 liftIO $ do
                   writeIORef batchEarlyRef $ Just early
                   bumpBatchId
@@ -352,25 +356,24 @@ withSchedulerInternal comp submitWork collect onScheduler = do
             Nothing -> error "Impossible: uninitialized early termination value"
             Just rs -> pure rs
      in withRunInIO $ \run -> do
-          eEarlyTermination <- try (run (onScheduler scheduler))
+          eEarlyTermination <- try $ run $ onScheduler scheduler
+          count <- atomicReadIntPVar jobsQueueCount
+          when (count == 0) $ run $ scheduleJobs_ jobs (\_ -> pure ())
           case eEarlyTermination of
             Left TerminateEarlyException -> run $ terminateWorkers tids >> readEarlyTermination
             Right _ -> do
-              --_ <- takeMVar jobsSchedulerStatus -- indicate that all jobs have been submitted
-              run $ scheduleJobs_ jobs (\_ -> liftIO $ void $ atomicSubIntPVar jobsQueueCount 1)
+              run $ unblockPopJQueue jobsQueue
               status <- takeMVar jobsSchedulerStatus
-              -- \ sentinel job. It protects against a case when all jobs have been
-              -- finished before `jobsSchedulerStatus` was cleared above
-              --schedulerStatus <- takeMVar jobsSchedulerStatus
               -- \ wait for all worker to finish. If any one of the workers had a problem, then
               -- this MVar will contain an exception
               run $ terminateWorkers tids
               case status of
                 SchedulerWorkerException (WorkerException exc)
                   | Just TerminateEarlyException <- fromException exc -> run readEarlyTermination
-                  | Just CancelBatchException <- fromException exc -> run $ do
-                    mEarly <- _batchEarly scheduler
-                    collectResults mEarly (collect jobsQueue)
+                  | Just CancelBatchException <- fromException exc ->
+                    run $ do
+                      mEarly <- _batchEarly scheduler
+                      collectResults mEarly (collect jobsQueue)
                   | otherwise -> throwIO exc
                 -- \ Here we need to unwrap the legit worker exception and rethrow it, so
                 -- the main thread will think like it's his own
