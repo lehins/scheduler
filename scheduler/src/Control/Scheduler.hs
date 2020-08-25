@@ -335,9 +335,9 @@ withScheduler ::
   -> (Scheduler m a -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m [a]
-withScheduler Seq action = reverse . resultsToList <$> withTrivialSchedulerRIO action
-withScheduler comp action =
-  reverse . resultsToList <$> withSchedulerInternal comp scheduleJobs readResults action
+withScheduler Seq = fmap (reverse . resultsToList) . withTrivialSchedulerRIO
+withScheduler comp =
+  fmap (reverse . resultsToList) . withSchedulerInternal comp scheduleJobs readResults
 
 -- | Same as `withScheduler`, except instead of a list it produces `Results`, which allows
 -- for distinguishing between the ways computation was terminated.
@@ -349,9 +349,8 @@ withSchedulerR ::
   -> (Scheduler m a -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m (Results a)
-withSchedulerR Seq action = reverseResults <$> withTrivialSchedulerRIO action
-withSchedulerR comp action =
-  reverseResults <$> withSchedulerInternal comp scheduleJobs readResults action
+withSchedulerR Seq = fmap reverseResults . withTrivialSchedulerRIO
+withSchedulerR comp = fmap reverseResults . withSchedulerInternal comp scheduleJobs readResults
 
 
 -- | Same as `withScheduler`, but discards results of submitted jobs.

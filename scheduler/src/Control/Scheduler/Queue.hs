@@ -71,7 +71,7 @@ data Job m a
 mkJob :: MonadIO m => ((a -> m ()) -> WorkerId -> m ()) -> m (Job m a)
 mkJob action = do
   resRef <- liftIO $ newIORef Nothing
-  return $! Job resRef (action (liftIO . writeIORef resRef . Just))
+  return $ Job resRef (action (liftIO . writeIORef resRef . Just))
 
 data JQueue m a =
   JQueue
