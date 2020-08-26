@@ -338,6 +338,7 @@ withScheduler ::
 withScheduler Seq = fmap (reverse . resultsToList) . withTrivialSchedulerRIO
 withScheduler comp =
   fmap (reverse . resultsToList) . withSchedulerInternal comp scheduleJobs readResults
+{-# INLINE withScheduler #-}
 
 -- | Same as `withScheduler`, except instead of a list it produces `Results`, which allows
 -- for distinguishing between the ways computation was terminated.
@@ -364,6 +365,7 @@ withScheduler_ ::
   -> m ()
 withScheduler_ Seq = void . withTrivialSchedulerRIO
 withScheduler_ comp = void . withSchedulerInternal comp scheduleJobs_ (const (pure []))
+{-# INLINE withScheduler_ #-}
 
 
 -- | Wait for all scheduled jobs to be done and collect the computed results into a

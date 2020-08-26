@@ -78,7 +78,7 @@ withSchedulerWSInternal withScheduler' states action =
   withRunInIO $ \run -> bracket lockState unlockState (run . runSchedulerWS)
   where
     mutex = _workerStatesMutex states
-    lockState = atomicModifyIORef' mutex ((,) True)
+    lockState = atomicModifyIORefCAS mutex ((,) True)
     unlockState wasLocked
       | wasLocked = pure ()
       | otherwise = writeIORef mutex False
@@ -192,6 +192,7 @@ withTrivialSchedulerRIO action = do
       liftIO $ do
         mEarly <- takeBatchEarly
         collectResults mEarly takeResults
+{-# INLINEABLE withTrivialSchedulerRIO #-}
 
 
 -- | This is generally a faster way to traverse while ignoring the result rather than using `mapM_`.
@@ -199,14 +200,16 @@ withTrivialSchedulerRIO action = do
 -- @since 1.0.0
 traverse_ :: (Applicative f, Foldable t) => (a -> f ()) -> t a -> f ()
 traverse_ f = F.foldl' (\c a -> c *> f a) (pure ())
-
+{-# INLINE traverse_ #-}
 
 scheduleJobs :: MonadIO m => Jobs m a -> (WorkerId -> m a) -> m ()
 scheduleJobs = scheduleJobsWith mkJob
+{-# INLINEABLE scheduleJobs #-}
 
 -- | Ignores the result of computation, thus avoiding some overhead.
 scheduleJobs_ :: MonadIO m => Jobs m a -> (WorkerId -> m b) -> m ()
 scheduleJobs_ = scheduleJobsWith (\job -> pure (Job_ (void . job (\_ -> pure ()))))
+{-# INLINEABLE scheduleJobs_ #-}
 
 scheduleJobsWith ::
      MonadIO m
@@ -221,6 +224,7 @@ scheduleJobsWith mkJob' Jobs {..} action = do
       res `seq` storeResult res
   liftIO $ void $ atomicAddIntPVar jobsQueueCount 1
   pushJQueue jobsQueue job
+{-# INLINEABLE scheduleJobsWith #-}
 
 
 -- | Runs the worker until it is terminated with a `WorkerTerminateException` or is killed
@@ -234,7 +238,6 @@ runWorker ::
   -> IO ()
 runWorker run unmask wId Jobs {jobsQueue, jobsQueueCount, jobsSchedulerStatus} = go
   where
-    dropCount = atomicSubIntPVar jobsQueueCount 1
     onBlockedMVar eUnblocked =
       case eUnblocked of
         Right () -> go
@@ -246,7 +249,7 @@ runWorker run unmask wId Jobs {jobsQueue, jobsQueueCount, jobsSchedulerStatus} =
     go = do
       eRes <- try $ do
         job <- run (popJQueue jobsQueue)
-        unmask (run (job wId) >> dropCount)
+        unmask (run (job wId) >> atomicSubIntPVar jobsQueueCount 1)
       -- \ popJQueue can block, but it is still interruptable
       case eRes of
         Right 1 -> try (putMVar jobsSchedulerStatus SchedulerIdle) >>= onBlockedMVar
@@ -262,7 +265,7 @@ runWorker run unmask wId Jobs {jobsQueue, jobsQueueCount, jobsSchedulerStatus} =
           -- exception in the main thread, especially if `exc` is asynchronous.
           unless (isSyncException exc) $ throwIO exc
           onBlockedMVar eUnblocked
-
+{-# INLINEABLE runWorker #-}
 
 
 initScheduler ::
@@ -334,6 +337,7 @@ initScheduler comp submitWork collect = do
                   throwIO CancelBatchException
           }
   pure (jobs, mkScheduler)
+{-# INLINEABLE initScheduler #-}
 
 withSchedulerInternal ::
      MonadUnliftIO m
@@ -378,6 +382,7 @@ withSchedulerInternal comp submitWork collect onScheduler = do
                     collectResults mEarly (collect jobsQueue)
                   -- \ Now we are sure all workers have done their job we can safely read
                   -- all of the IORefs with results
+{-# INLINEABLE withSchedulerInternal #-}
 
 
 collectResults :: Applicative f => Maybe (Early a) -> f [a] -> f (Results a)
@@ -386,6 +391,7 @@ collectResults mEarly collect =
     Nothing -> Finished <$> collect
     Just (Early r) -> FinishedEarly <$> collect <*> pure r
     Just (EarlyWith r) -> pure $ FinishedEarlyWith r
+{-# INLINEABLE collectResults #-}
 
 
 spawnWorkers :: forall m a. MonadUnliftIO m => Jobs m a -> Comp -> m [ThreadId]
@@ -406,6 +412,7 @@ spawnWorkers jobs@Jobs {jobsNumWorkers} =
       withRunInIO $ \run ->
         forM (zip [0 ..] ws) $ \(wId, on) ->
           fork on $ \unmask -> runWorker run unmask wId jobs
+{-# INLINEABLE spawnWorkers #-}
 
 terminateWorkers :: [ThreadId] -> IO ()
 terminateWorkers = traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
@@ -417,6 +424,7 @@ resultsToList = \case
   Finished rs -> rs
   FinishedEarly rs r -> r:rs
   FinishedEarlyWith r -> [r]
+{-# INLINEABLE resultsToList #-}
 
 
 reverseResults :: Results a -> Results a
@@ -424,6 +432,7 @@ reverseResults = \case
   Finished rs -> Finished (reverse rs)
   FinishedEarly rs r -> FinishedEarly (reverse rs) r
   res -> res
+{-# INLINEABLE reverseResults #-}
 
 
 

@@ -62,6 +62,7 @@ popQueue queue =
       case reverse (qStack queue) of
         []   -> Nothing
         y:ys -> Just (y, queue {qQueue = ys, qStack = []})
+{-# INLINEABLE popQueue #-}
 
 data Job m a
   = Job {-# UNPACK #-} !(IORef (Maybe a)) (WorkerId -> m ())
@@ -72,6 +73,7 @@ mkJob :: MonadIO m => ((a -> m ()) -> WorkerId -> m ()) -> m (Job m a)
 mkJob action = do
   resRef <- liftIO $ newIORef Nothing
   return $ Job resRef (action (liftIO . writeIORef resRef . Just))
+{-# INLINEABLE mkJob #-}
 
 data JQueue m a =
   JQueue
@@ -103,6 +105,7 @@ pushJQueue (JQueue jQueueRef _) job =
             , qBaton = newBaton
             }
         , putMVar qBaton ())
+{-# INLINEABLE pushJQueue #-}
 
 -- | Pops an item from the queue. The job returns the total job counts that is still left
 -- in the queue
@@ -120,18 +123,22 @@ popJQueue (JQueue jQueueRef lock) = liftIO inner
               , case job of
                   Job _ action -> return action
                   Job_ action_ -> return action_)
+{-# INLINEABLE popJQueue #-}
 
 unblockPopJQueue :: MonadIO m => JQueue m a -> m ()
 unblockPopJQueue (JQueue _ lock) = liftIO $ putMVar lock ()
+{-# INLINEABLE unblockPopJQueue #-}
 
 blockPopJQueue :: MonadIO m => JQueue m a -> m ()
 blockPopJQueue (JQueue _ lock) = liftIO $ takeMVar lock
+{-# INLINEABLE blockPopJQueue #-}
 
 -- | Clears any jobs that haven't been started yet. Returns the number of jobs that are
 -- still in progress and have not been yet been completed.
 clearPendingJQueue :: MonadIO m => JQueue m a -> m ()
 clearPendingJQueue (JQueue queueRef _) =
   liftIO $ atomicModifyIORefCAS_ queueRef $ \queue -> (queue {qQueue = [], qStack = []})
+{-# INLINEABLE clearPendingJQueue #-}
 
 
 -- | Extracts all results available up to now, the uncomputed ones are discarded. This
@@ -142,7 +149,7 @@ readResults (JQueue jQueueRef _) =
     results <-
       atomicModifyIORefCAS jQueueRef $ \queue ->
         (queue {qQueue = [], qStack = [], qResults = []}, qResults queue)
-    rs <- mapM readIORef results
-    return $ catMaybes rs
+    catMaybes <$> mapM readIORef results
+{-# INLINEABLE readResults #-}
 
 
