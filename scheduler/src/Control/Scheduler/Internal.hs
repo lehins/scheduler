@@ -275,7 +275,7 @@ initScheduler ::
 initScheduler comp submitWork collect = do
   jobsNumWorkers <- getCompWorkers comp
   jobsQueue <- newJQueue
-  jobsQueueCount <- liftIO $ newPVar 0
+  jobsQueueCount <- liftIO $ newPVar 1
   jobsSchedulerStatus <- liftIO newEmptyMVar
   earlyTerminationResultRef <- liftIO $ newIORef Nothing
   batchIdRef <- liftIO $ newIORef $ BatchId 0
@@ -303,8 +303,7 @@ initScheduler comp submitWork collect = do
                   writeIORef earlyTerminationResultRef $ Just finishEarly
                   throwIO TerminateEarlyException
           , _waitForBatch =
-              do count <- liftIO $ atomicReadIntPVar jobsQueueCount
-                 when (count == 0) $ scheduleJobs_ jobs (\_ -> pure ())
+              do scheduleJobs_ jobs (\_ -> liftIO $ void $ atomicSubIntPVar jobsQueueCount 1)
                  unblockPopJQueue jobsQueue
                  status <- liftIO $ takeMVar jobsSchedulerStatus
                  mEarly <- liftIO $ atomicModifyIORef' batchEarlyRef $ \mEarly -> (Nothing, mEarly)
@@ -323,7 +322,7 @@ initScheduler comp submitWork collect = do
                        liftIO bumpBatchId
                        res <- collect jobsQueue
                        res `seq` collectResults mEarly (pure res)
-                 rs <$ liftIO (atomicWriteIntPVar jobsQueueCount 0)
+                 rs <$ liftIO (atomicWriteIntPVar jobsQueueCount 1)
           , _earlyResults = liftIO (readIORef earlyTerminationResultRef)
           , _currentBatchId = liftIO (readIORef batchIdRef)
           , _batchEarly = liftIO (readIORef batchEarlyRef)
@@ -357,11 +356,10 @@ withSchedulerInternal comp submitWork collect onScheduler = do
             Just rs -> pure rs
      in withRunInIO $ \run -> do
           eEarlyTermination <- try $ run $ onScheduler scheduler
-          count <- atomicReadIntPVar jobsQueueCount
-          when (count == 0) $ run $ scheduleJobs_ jobs (\_ -> pure ())
           case eEarlyTermination of
             Left TerminateEarlyException -> run $ terminateWorkers tids >> readEarlyTermination
             Right _ -> do
+              run $ scheduleJobs_ jobs (\_ -> liftIO $ void $ atomicSubIntPVar jobsQueueCount 1)
               run $ unblockPopJQueue jobsQueue
               status <- takeMVar jobsSchedulerStatus
               -- \ wait for all worker to finish. If any one of the workers had a problem, then
