@@ -30,7 +30,6 @@ module Control.Scheduler.Internal
   , reverseResults
   , resultsToList
   , traverse_
-  , safeBracketOnError
   ) where
 
 import Data.Coerce
@@ -348,23 +347,21 @@ withSchedulerInternal comp submitWork collect onScheduler = do
   (jobs@Jobs {..}, mkScheduler) <- initScheduler comp submitWork collect
   -- / Wait for the initial jobs to get scheduled before spawining off the workers, otherwise it
   -- would be trickier to identify the beginning and the end of a job pool.
-  safeBracketOnError (spawnWorkers jobs comp) terminateWorkers $ \tids ->
-    let scheduler = mkScheduler tids
-        readEarlyTermination =
-          _earlyResults scheduler >>= \case
-            Nothing -> error "Impossible: uninitialized early termination value"
-            Just rs -> pure rs
-     in withRunInIO $ \run -> do
-          eEarlyTermination <- try $ run $ onScheduler scheduler
-          case eEarlyTermination of
-            Left TerminateEarlyException -> run $ terminateWorkers tids >> readEarlyTermination
+  withRunInIO $ \run -> do
+    bracket (run (spawnWorkers jobs comp)) terminateWorkers $ \tids ->
+      let scheduler = mkScheduler tids
+          readEarlyTermination =
+            _earlyResults scheduler >>= \case
+              Nothing -> error "Impossible: uninitialized early termination value"
+              Just rs -> pure rs
+       in try (run (onScheduler scheduler)) >>= \case
+            Left TerminateEarlyException -> run readEarlyTermination
             Right _ -> do
               run $ scheduleJobs_ jobs (\_ -> liftIO $ void $ atomicSubIntPVar jobsQueueCount 1)
               run $ unblockPopJQueue jobsQueue
               status <- takeMVar jobsSchedulerStatus
-              -- \ wait for all worker to finish. If any one of the workers had a problem, then
-              -- this MVar will contain an exception
-              run $ terminateWorkers tids
+                -- \ wait for all worker to finish. If any one of the workers had a problem, then
+                -- this MVar will contain an exception
               case status of
                 SchedulerWorkerException (WorkerException exc)
                   | Just TerminateEarlyException <- fromException exc -> run readEarlyTermination
@@ -373,14 +370,14 @@ withSchedulerInternal comp submitWork collect onScheduler = do
                       mEarly <- _batchEarly scheduler
                       collectResults mEarly (collect jobsQueue)
                   | otherwise -> throwIO exc
-                -- \ Here we need to unwrap the legit worker exception and rethrow it, so
-                -- the main thread will think like it's his own
+                  -- \ Here we need to unwrap the legit worker exception and rethrow it, so
+                  -- the main thread will think like it's his own
                 SchedulerIdle ->
                   run $ do
                     mEarly <- _batchEarly scheduler
                     collectResults mEarly (collect jobsQueue)
-                -- \ Now we are sure all workers have done their job we can safely read
-                -- all of the IORefs with results
+                  -- \ Now we are sure all workers have done their job we can safely read
+                  -- all of the IORefs with results
 
 
 collectResults :: Applicative f => Maybe (Early a) -> f [a] -> f (Results a)
@@ -410,8 +407,8 @@ spawnWorkers jobs@Jobs {jobsNumWorkers} =
         forM (zip [0 ..] ws) $ \(wId, on) ->
           fork on $ \unmask -> runWorker run unmask wId jobs
 
-terminateWorkers :: MonadIO m => [ThreadId] -> m ()
-terminateWorkers = liftIO . traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
+terminateWorkers :: [ThreadId] -> IO ()
+terminateWorkers = traverse_ (`throwTo` SomeAsyncException WorkerTerminateException)
 
 -- | Conversion to a list. Elements are expected to be in the orignal LIFO order, so
 -- calling `reverse` is still necessary for getting the results in FIFO order.
@@ -431,18 +428,6 @@ reverseResults = \case
 
 
 -- Copies from unliftio
-
-safeBracketOnError :: MonadUnliftIO m => m a -> (a -> m b) -> (a -> m c) -> m c
-safeBracketOnError before after thing =
-  withRunInIO $ \run ->
-    mask $ \restore -> do
-      x <- run before
-      res1 <- try $ restore $ run $ thing x
-      case res1 of
-        Left (e1 :: SomeException) -> do
-          _ :: Either SomeException b <- try $ uninterruptibleMask_ $ run $ after x
-          throwIO e1
-        Right y -> return y
 
 isSyncException :: Exception e => e -> Bool
 isSyncException exc =
