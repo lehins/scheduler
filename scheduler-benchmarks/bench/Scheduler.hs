@@ -7,6 +7,7 @@ import Control.Monad (replicateM_, replicateM)
 import Control.Monad.Par (IVar, Par, get, newFull_, runParIO)
 import Control.Parallel (par)
 import Control.Scheduler
+import Control.Scheduler.Global
 import Control.Concurrent (getNumCapabilities)
 import Control.Concurrent.Async.Pool as AsyncPool
 import Criterion.Main
@@ -17,41 +18,50 @@ import Streamly (asyncly)
 import qualified Streamly.Prelude as S
 import UnliftIO.Async (pooledMapConcurrently, pooledReplicateConcurrently)
 
+import System.IO.Unsafe (unsafePerformIO)
+
+globalScheduler :: GlobalScheduler IO
+globalScheduler = unsafePerformIO (newGlobalScheduler Par)
+{-# NOINLINE globalScheduler #-}
+
 main :: IO ()
 main = do
   let k = 10000
   caps <- getNumCapabilities
   AsyncPool.withTaskGroup caps $ \ !taskGroup ->
     defaultMain
-    [ bgroup
-        "withScheduler"
-        [ bgroup
-            "noop"
-            [ bench "Seq" $ whnfIO (withScheduler_ Seq (\_ -> pure ()))
-            , bench "Par" $ whnfIO (withScheduler_ Par (\_ -> pure ()))
-            , bench "Par'" $ whnfIO (withScheduler_ Par' (\_ -> pure ()))
-            ]
-        , let schedule s = replicateM_ k $ scheduleWork_ s (pure ())
-           in bgroup
-                ("pure () - " ++ show k)
-                [ bench "trivial" $ whnfIO (schedule trivialScheduler_)
-                , bench "Seq" $ whnfIO (withScheduler_ Seq schedule)
-                , bench "Par" $ whnfIO (withScheduler_ Par schedule)
-                , bench "Par'" $ whnfIO (withScheduler_ Par' schedule)
-                ]
-        , let schedule s = replicateM_ k $ scheduleWork s (pure ())
-           in bgroup
-                ("pure [()] - " ++ show k)
-                [ bench "trivial" $ whnfIO (withTrivialScheduler schedule)
-                , bench "Seq" $ whnfIO (withScheduler Seq schedule)
-                , bench "Par" $ whnfIO (withScheduler Par schedule)
-                , bench "Par'" $ whnfIO (withScheduler Par' schedule)
-                ]
-        ]
-    , bgroup "libraries" $
-      [mkBenchReplicate taskGroup "Sum" n x sumIORef sumParVar | n <- [1000], x <- [1000]] ++
-      [mkBenchMap taskGroup "Sum" n sumIO sumParIO sumPar | n <- [2000]]
-    ]
+      [ bgroup
+          "withScheduler"
+          [ bgroup
+              "noop"
+              [ bench "Seq" $ whnfIO (withScheduler_ Seq (\_ -> pure ()))
+              , bench "Par" $ whnfIO (withScheduler_ Par (\_ -> pure ()))
+              , bench "Par (gloabal)" $
+                whnfIO (withGlobalScheduler_ globalScheduler (\_ -> pure ()))
+              , bench "Par'" $ whnfIO (withScheduler_ Par' (\_ -> pure ()))
+              ]
+          , let schedule s = replicateM_ k $ scheduleWork_ s (pure ())
+             in bgroup
+                  ("pure () - " ++ show k)
+                  [ bench "trivial" $ whnfIO (schedule trivialScheduler_)
+                  , bench "Seq" $ whnfIO (withScheduler_ Seq schedule)
+                  , bench "Par" $ whnfIO (withScheduler_ Par schedule)
+                  , bench "Par (gloabal)" $ whnfIO (withGlobalScheduler_ globalScheduler schedule)
+                  , bench "Par'" $ whnfIO (withScheduler_ Par' schedule)
+                  ]
+          , let schedule s = replicateM_ k $ scheduleWork s (pure ())
+             in bgroup
+                  ("pure [()] - " ++ show k)
+                  [ bench "trivial" $ whnfIO (withTrivialScheduler schedule)
+                  , bench "Seq" $ whnfIO (withScheduler Seq schedule)
+                  , bench "Par" $ whnfIO (withScheduler Par schedule)
+                  , bench "Par'" $ whnfIO (withScheduler Par' schedule)
+                  ]
+          ]
+      , bgroup "libraries" $
+        [mkBenchReplicate taskGroup "Sum" n x sumIORef sumParVar | n <- [1000], x <- [1000]] ++
+        [mkBenchMap taskGroup "Sum" n sumIO sumParIO sumPar | n <- [2000]]
+      ]
   where
     sumIO :: Int -> IO Int
     sumIO x = do

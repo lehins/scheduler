@@ -27,6 +27,7 @@ module Control.Scheduler.Types
   , MutexException(..)
   ) where
 
+import Control.Concurrent (ThreadId)
 import Control.Concurrent.MVar
 import Control.Exception
 import Control.Scheduler.Computation
@@ -134,7 +135,12 @@ data WorkerStates s = WorkerStates
 newtype BatchId = BatchId { getBatchId :: Int }
   deriving (Show, Eq, Ord)
 
-newtype GlobalScheduler = GlobalScheduler (IORef (Scheduler IO ()))
+data GlobalScheduler m =
+  GlobalScheduler
+    { globalSchedulerComp :: !Comp
+    , globalSchedulerMVar :: !(MVar (Scheduler m ()))
+    , globalSchedulerThreadIdsRef :: !(IORef [ThreadId])
+    }
 
 
 data SchedulerStatus

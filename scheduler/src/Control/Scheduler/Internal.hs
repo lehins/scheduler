@@ -30,6 +30,7 @@ module Control.Scheduler.Internal
   , reverseResults
   , resultsToList
   , traverse_
+  , safeBracketOnError
   ) where
 
 import Data.Coerce
@@ -81,7 +82,7 @@ withSchedulerWSInternal withScheduler' states action =
     lockState = atomicModifyIORefCAS mutex ((,) True)
     unlockState wasLocked
       | wasLocked = pure ()
-      | otherwise = writeIORef mutex False
+      | otherwise = atomicWriteIORef mutex False
     runSchedulerWS isLocked
       | isLocked = liftIO $ throwIO MutexException
       | otherwise =
@@ -172,7 +173,7 @@ withTrivialSchedulerRIO action = do
               \ !early ->
                 liftIO $ do
                   finishEarly <- collectResults (Just early) takeResults
-                  bumpBatchId <* writeIORef finResRef (Just finishEarly)
+                  bumpBatchId <* atomicWriteIORef finResRef (Just finishEarly)
                   throwIO TerminateEarlyException
           , _waitForBatch =
               liftIO $ do
@@ -183,7 +184,7 @@ withTrivialSchedulerRIO action = do
           , _currentBatchId = liftIO (readIORef batchRef)
           , _batchEarly = liftIO takeBatchEarly
           , _cancelCurrentBatch =
-              \early -> liftIO (writeIORef batchEarlyRef (Just early) >> bumpBatchId)
+              \early -> liftIO (atomicWriteIORef batchEarlyRef (Just early) >> bumpBatchId)
           }
   _ :: Either TerminateEarlyException b <- withRunInIO $ \run -> try $ run $ action scheduler
   liftIO (readIORef finResRef) >>= \case
@@ -289,7 +290,7 @@ initScheduler comp submitWork collect = do
           , jobsQueueCount = jobsQueueCount
           , jobsSchedulerStatus = jobsSchedulerStatus
           }
-      bumpBatchId = atomicModifyIORef' (coerce batchIdRef) (\x -> ((x + (1 :: Int)), ()))
+      bumpBatchId = atomicModifyIORefCAS_ (coerce batchIdRef) (+ (1 :: Int))
       mkScheduler tids =
         Scheduler
           { _numWorkers = jobsNumWorkers
@@ -302,13 +303,13 @@ initScheduler comp submitWork collect = do
                     EarlyWith r -> pure $ FinishedEarlyWith r
                 liftIO $ do
                   bumpBatchId
-                  writeIORef earlyTerminationResultRef $ Just finishEarly
+                  atomicWriteIORef earlyTerminationResultRef $ Just finishEarly
                   throwIO TerminateEarlyException
           , _waitForBatch =
               do scheduleJobs_ jobs (\_ -> liftIO $ void $ atomicSubIntPVar jobsQueueCount 1)
                  unblockPopJQueue jobsQueue
                  status <- liftIO $ takeMVar jobsSchedulerStatus
-                 mEarly <- liftIO $ atomicModifyIORef' batchEarlyRef $ \mEarly -> (Nothing, mEarly)
+                 mEarly <- liftIO $ atomicModifyIORefCAS batchEarlyRef $ \mEarly -> (Nothing, mEarly)
                  rs <-
                    case status of
                      SchedulerWorkerException (WorkerException exc) ->
@@ -332,7 +333,7 @@ initScheduler comp submitWork collect = do
               \early -> do
                 blockPopJQueue jobsQueue
                 liftIO $ do
-                  writeIORef batchEarlyRef $ Just early
+                  atomicWriteIORef batchEarlyRef $ Just early
                   bumpBatchId
                   throwIO CancelBatchException
           }
@@ -443,3 +444,14 @@ isSyncException exc =
   case fromException (toException exc) of
     Just (SomeAsyncException _) -> False
     Nothing -> True
+
+safeBracketOnError :: MonadUnliftIO m => m a -> (a -> m b) -> (a -> m c) -> m c
+safeBracketOnError before after thing = withRunInIO $ \run -> mask $ \restore -> do
+  x <- run before
+  res1 <- try $ restore $ run $ thing x
+  case res1 of
+    Left (e1 :: SomeException) -> do
+      _ :: Either SomeException b <-
+        try $ uninterruptibleMask_ $ run $ after x
+      throwIO e1
+    Right y -> return y
