@@ -80,6 +80,11 @@ main = do
     sumParVar :: IVar Int -> Par Int
     sumParVar ivar = get ivar >>= sumPar
 
+replicateConcurrentlyGlobal_ :: Int -> IO () -> IO ()
+replicateConcurrentlyGlobal_ n f =
+  withGlobalScheduler_ globalScheduler $ \s -> replicateM_ n $ scheduleWork_ s f
+
+
 mkBenchReplicate ::
      NFData a
   => TaskGroup
@@ -94,6 +99,10 @@ mkBenchReplicate _taskGroup name n x fxIO fxPar =
     ("replicate/" <> name <> str)
     [ bench "scheduler/replicateConcurrently" $
       nfIO $ replicateConcurrently Par n (newIORef x >>= fxIO)
+    , bench "scheduler/replicateConcurrently_" $
+      nfIO $ replicateConcurrently_ Par n (newIORef x >>= fxIO >>= \ !_ -> pure ())
+    , bench "scheduler/replicateConcurrently_ (global)" $
+      nfIO $ replicateConcurrentlyGlobal_ n (newIORef x >>= fxIO >>= \ !_ -> pure ())
     , bench "unliftio/pooledReplicateConcurrently" $
       nfIO $ pooledReplicateConcurrently n (newIORef x >>= fxIO)
     , bench "streamly/replicateM" $

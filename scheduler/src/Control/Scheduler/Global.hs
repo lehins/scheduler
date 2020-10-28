@@ -55,20 +55,20 @@ withGlobalScheduler_ GlobalScheduler {..} action =
     let initializeNewScheduler = do
           initGlobalScheduler globalSchedulerComp $ \scheduler tids ->
             liftIO $ do
-              oldTids <-
-                atomicModifyIORef' globalSchedulerThreadIdsRef $ \oldTids -> (tids, oldTids)
+              oldTids <- atomicModifyIORef' globalSchedulerThreadIdsRef $ (,) tids
               terminateWorkers oldTids
               putMVar globalSchedulerMVar scheduler
-    tryTakeMVar globalSchedulerMVar >>= \case
-      Nothing -> run $ withScheduler_ globalSchedulerComp action
-      Just scheduler -> do
-        let runScheduler =
-              run $ do
-                _ <- action scheduler
-                mEarly <- _earlyResults scheduler
-                mEarly <$ when (isNothing mEarly) (waitForBatch_ scheduler)
-        mEarly <- runScheduler `onException` run initializeNewScheduler
-        -- Whenever a scheduler is terminated it is no longer usable, need to re-initialize
-        case mEarly of
-          Nothing -> putMVar globalSchedulerMVar scheduler
-          Just _ -> run initializeNewScheduler
+    mask $ \restore ->
+      tryTakeMVar globalSchedulerMVar >>= \case
+        Nothing -> restore $ run $ withScheduler_ globalSchedulerComp action
+        Just scheduler -> do
+          let runScheduler =
+                run $ do
+                  _ <- action scheduler
+                  mEarly <- _earlyResults scheduler
+                  mEarly <$ when (isNothing mEarly) (waitForBatch_ scheduler)
+          mEarly <- restore runScheduler `onException` run initializeNewScheduler
+          -- Whenever a scheduler is terminated it is no longer usable, need to re-initialize
+          case mEarly of
+            Nothing -> putMVar globalSchedulerMVar scheduler
+            Just _ -> run initializeNewScheduler
