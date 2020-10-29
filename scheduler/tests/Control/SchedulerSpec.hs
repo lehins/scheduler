@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 module Control.SchedulerSpec
@@ -384,7 +385,7 @@ prop_WorkerStateExclusive comp (NonNegative n) =
   concurrentExpectation $ do
     state <- initWorkerStates comp (\wid -> (,) wid <$> newIORef (0 :: Int))
     workerStatesComp state `shouldBe` comp
-    nWorkers <- getCompWorkers comp
+    let nWorkers = compNumWorkers comp
     let scheduleJobs schedulerWS = do
           replicateM n $
             scheduleWorkState schedulerWS $ \(wid, ref) -> do

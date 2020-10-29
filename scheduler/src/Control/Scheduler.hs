@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RankNTypes #-}
 -- |
@@ -57,7 +58,7 @@ module Control.Scheduler
   , initWorkerStates
   -- * Computation strategies
   , Comp(..)
-  , getCompWorkers
+  , compNumWorkers
   -- * Useful functions
   , replicateConcurrently
   , replicateConcurrently_
@@ -69,15 +70,13 @@ module Control.Scheduler
   , MutexException(..)
   ) where
 
-import Control.Monad
-import Control.Monad.IO.Unlift
-import Control.Monad.Primitive (PrimMonad)
+import Control.Prim.Monad
 import Control.Scheduler.Computation
 import Control.Scheduler.Internal
 import Control.Scheduler.Types
 import Control.Scheduler.Queue
 import qualified Data.Foldable as F (traverse_, toList)
-import Data.Primitive.SmallArray
+import Data.Prim.Array
 import Data.Traversable
 
 
@@ -155,7 +154,7 @@ withSchedulerWSR = withSchedulerWSInternal withSchedulerR
 scheduleWorkState :: SchedulerWS s m a -> (s -> m a) -> m ()
 scheduleWorkState schedulerS withState =
   scheduleWorkId (_getScheduler schedulerS) $ \(WorkerId i) ->
-    withState (indexSmallArray (_workerStatesArray (_workerStates schedulerS)) i)
+    withState (indexSBArray (_workerStatesArray (_workerStates schedulerS)) i)
 
 -- | Same as `scheduleWorkState`, but dont' keep the result of computation.
 --
@@ -163,7 +162,7 @@ scheduleWorkState schedulerS withState =
 scheduleWorkState_ :: SchedulerWS s m () -> (s -> m ()) -> m ()
 scheduleWorkState_ schedulerS withState =
   scheduleWorkId_ (_getScheduler schedulerS) $ \(WorkerId i) ->
-    withState (indexSmallArray (_workerStatesArray (_workerStates schedulerS)) i)
+    withState (indexSBArray (_workerStatesArray (_workerStates schedulerS)) i)
 
 
 -- | Get the number of workers. Will mainly depend on the computation strategy and/or number of
@@ -257,7 +256,7 @@ terminate_ = (`_terminate` Early ())
 -- computation strategy, except it is restricted to `PrimMonad`, instead of `MonadUnliftIO`.
 --
 -- @since 1.4.2
-withTrivialScheduler :: PrimMonad m => (Scheduler m a -> m b) -> m [a]
+withTrivialScheduler :: MonadPrim s m => (Scheduler m a -> m b) -> m [a]
 withTrivialScheduler action = F.toList <$> withTrivialSchedulerR action
 
 

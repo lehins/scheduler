@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
 -- |
@@ -15,17 +16,15 @@ module Control.Scheduler.Global
   , withGlobalScheduler_
   ) where
 
-import Data.Maybe
-import Control.Concurrent (ThreadId)
-import Control.Concurrent.MVar
-import Control.Exception
-import Control.Monad
-import Control.Monad.IO.Unlift
+import Control.Prim.Concurrent (ThreadId)
+import Control.Prim.Concurrent.MVar
+import Control.Prim.Exception
+import Control.Prim.Monad.Unsafe (unsafePerformIO)
 import Control.Scheduler
 import Control.Scheduler.Internal
 import Control.Scheduler.Types
-import Data.IORef
-import System.IO.Unsafe (unsafePerformIO)
+import Data.Maybe
+import Data.Prim.Ref
 
 -- | Global scheduler with `Par` computation strategy that can be used anytime using
 -- `withGlobalScheduler_`
@@ -38,7 +37,7 @@ initGlobalScheduler ::
      MonadUnliftIO m => Comp -> (Scheduler m a -> [ThreadId] -> m b) -> m b
 initGlobalScheduler comp action = do
   (jobs, mkScheduler) <- initScheduler comp scheduleJobs_ (const (pure []))
-  safeBracketOnError (spawnWorkers jobs comp) (liftIO . terminateWorkers) $ \tids ->
+  bracketOnError (spawnWorkers jobs comp) terminateWorkers $ \tids ->
     action (mkScheduler tids) tids
 
 
@@ -49,17 +48,16 @@ initGlobalScheduler comp action = do
 -- @since 1.5.0
 newGlobalScheduler :: MonadUnliftIO m => Comp -> m (GlobalScheduler m)
 newGlobalScheduler comp =
-  initGlobalScheduler comp $ \scheduler tids ->
-    liftIO $ do
-      mvar <- newMVar scheduler
-      tidsRef <- newIORef tids
-      _ <- mkWeakMVar mvar (readIORef tidsRef >>= terminateWorkers)
-      pure $
-        GlobalScheduler
-          { globalSchedulerComp = comp
-          , globalSchedulerMVar = mvar
-          , globalSchedulerThreadIdsRef = tidsRef
-          }
+  initGlobalScheduler comp $ \scheduler tids -> do
+    mvar <- newMVar scheduler
+    tidsRef <- newRef tids
+    _ <- mkWeakMVar mvar (readRef tidsRef >>= terminateWorkers)
+    pure $
+      GlobalScheduler
+        { globalSchedulerComp = comp
+        , globalSchedulerMVar = mvar
+        , globalSchedulerThreadIdsRef = tidsRef
+        }
 
 -- | Use the global scheduler if it is not busy, otherwise initialize a temporary one. It
 -- means that this function by itself will not block, but if the same global scheduler
@@ -72,7 +70,7 @@ withGlobalScheduler_ GlobalScheduler {..} action =
     let initializeNewScheduler = do
           initGlobalScheduler globalSchedulerComp $ \scheduler tids ->
             liftIO $ do
-              oldTids <- atomicModifyIORef' globalSchedulerThreadIdsRef $ (,) tids
+              oldTids <- atomicModifyRef globalSchedulerThreadIdsRef $ (,) tids
               terminateWorkers oldTids
               putMVar globalSchedulerMVar scheduler
     mask $ \restore ->
@@ -88,4 +86,4 @@ withGlobalScheduler_ GlobalScheduler {..} action =
           -- Whenever a scheduler is terminated it is no longer usable, need to re-initialize
           case mEarly of
             Nothing -> putMVar globalSchedulerMVar scheduler
-            Just _ -> run initializeNewScheduler
+            Just _  -> run initializeNewScheduler

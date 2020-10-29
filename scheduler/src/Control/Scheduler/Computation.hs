@@ -12,18 +12,13 @@
 -- Portability : non-portable
 --
 module Control.Scheduler.Computation
-  ( Comp(.., Par, Par'), getCompWorkers
+  ( Comp(.., Par, Par'), compNumWorkers
   ) where
 
-import Control.Concurrent (getNumCapabilities)
 import Control.DeepSeq (NFData(..), deepseq)
-import Control.Monad.IO.Class
-#if !MIN_VERSION_base(4,11,0)
-import Data.Semigroup
-#endif
-import Data.IORef
-import Data.Word
-import System.IO.Unsafe (unsafePerformIO)
+import Control.Prim.Concurrent (getNumCapabilities)
+import Control.Prim.Monad.Unsafe (unsafePerformIO)
+import Data.Prim
 
 -- | Computation strategy to use when scheduling work.
 data Comp
@@ -100,24 +95,23 @@ joinComp x y =
         ParN n2 -> ParN (max n1 n2)
 {-# NOINLINE joinComp #-}
 
-numCapsRef :: IORef Int
-numCapsRef = unsafePerformIO $ do
-  caps <- getNumCapabilities
-  newIORef caps
-{-# NOINLINE numCapsRef #-}
+numCaps :: Int
+numCaps = unsafePerformIO getNumCapabilities
+{-# NOINLINE numCaps #-}
 
 -- | Figure out how many workers will this computation strategy create.
 --
 -- /Note/ - If at any point during program execution global number of capabilities gets
 -- changed with `Control.Concurrent.setNumCapabilities`, it will have no affect on this
--- function, unless it hasn't yet been called with `Par` or `Par'` arguments.
+-- function, unless it hasn't yet been called with `Par` or `Par'` arguments. In other
+-- words, it is a pure value and it will not change throughout execution of the program.
 --
--- @since 1.1.0
-getCompWorkers :: MonadIO m => Comp -> m Int
-getCompWorkers =
+-- @since 2.0.0
+compNumWorkers :: Comp -> Int
+compNumWorkers =
   \case
-    Seq -> return 1
-    Par -> liftIO (readIORef numCapsRef)
-    ParOn ws -> return $ length ws
-    Par' -> liftIO (readIORef numCapsRef)
-    ParN n -> return $ fromIntegral n
+    Seq      -> 1
+    Par      -> numCaps
+    ParOn ws -> length ws
+    Par'     -> numCaps
+    ParN n   -> fromIntegral n
