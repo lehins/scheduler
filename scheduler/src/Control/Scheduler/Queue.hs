@@ -26,12 +26,15 @@ module Control.Scheduler.Queue
   , readResults
   , blockPopJQueue
   , unblockPopJQueue
+  , atomicModifyRefCAS
+  , atomicModifyRefCAS_
   ) where
 
 import Control.Prim.Concurrent.MVar
 import Control.Prim.Monad
 import Data.Maybe
 import Data.Prim.Ref
+import Data.Atomics (atomicModifyIORefCAS, atomicModifyIORefCAS_)
 
 -- | A blocking unbounded queue that keeps the jobs in FIFO order and the results Refs
 -- in reversed
@@ -70,8 +73,8 @@ data Job m a
 
 mkJob :: MonadIO m => ((a -> m ()) -> WorkerId -> m ()) -> m (Job m a)
 mkJob action = do
-  resRef <- liftIO $ newRef Nothing
-  return $ Job resRef (action (liftIO . writeRef resRef . Just))
+  resRef <- newRef Nothing
+  return $ Job resRef (action (writeRef resRef . Just))
 {-# INLINEABLE mkJob #-}
 
 data JQueue m a =
@@ -81,40 +84,38 @@ data JQueue m a =
     }
 
 newJQueue :: MonadIO m => m (JQueue m a)
-newJQueue =
-  liftIO $ do
-    newLock <- newEmptyMVar
-    newBaton <- newEmptyMVar
-    queueRef <- newRef (Queue [] [] [] newBaton)
-    return $ JQueue queueRef newLock
+newJQueue = do
+  newLock <- newEmptyMVar
+  newBaton <- newEmptyMVar
+  queueRef <- newRef (Queue [] [] [] newBaton)
+  return $ JQueue queueRef newLock
 
 -- | Pushes an item onto a queue and returns the previous count.
 pushJQueue :: MonadIO m => JQueue m a -> Job m a -> m ()
-pushJQueue (JQueue jQueueRef _) job =
-  liftIO $ do
-    newBaton <- newEmptyMVar
-    join $
-      atomicModifyRef jQueueRef $ \queue@Queue {qStack, qResults, qBaton} ->
-        ( queue
-            { qResults =
-                case job of
-                  Job resRef _ -> resRef : qResults
-                  _            -> qResults
-            , qStack = job : qStack
-            , qBaton = newBaton
-            }
-        , putMVar qBaton ())
+pushJQueue (JQueue jQueueRef _) job = do
+  newBaton <- newEmptyMVar
+  join $
+    atomicModifyRefCAS jQueueRef $ \queue@Queue {qStack, qResults, qBaton} ->
+      ( queue
+          { qResults =
+              case job of
+                Job resRef _ -> resRef : qResults
+                _ -> qResults
+          , qStack = job : qStack
+          , qBaton = newBaton
+          }
+      , putMVar qBaton ())
 {-# INLINEABLE pushJQueue #-}
 
 -- | Pops an item from the queue. The job returns the total job counts that is still left
 -- in the queue
 popJQueue :: MonadUnliftIO m => JQueue m a -> m (WorkerId -> m ())
-popJQueue (JQueue jQueueRef lock) = liftIO inner
+popJQueue (JQueue jQueueRef lock) = inner
   where
     inner = do
       readMVar lock
       join $
-        atomicModifyRef jQueueRef $ \queue@Queue {qBaton} ->
+        atomicModifyRefCAS jQueueRef $ \queue@Queue {qBaton} ->
           case popQueue queue of
             Nothing -> (queue, readMVar qBaton >> inner)
             Just (job, newQueue) ->
@@ -125,30 +126,37 @@ popJQueue (JQueue jQueueRef lock) = liftIO inner
 {-# INLINEABLE popJQueue #-}
 
 unblockPopJQueue :: MonadIO m => JQueue m a -> m ()
-unblockPopJQueue (JQueue _ lock) = liftIO $ putMVar lock ()
+unblockPopJQueue (JQueue _ lock) = putMVar lock ()
 {-# INLINEABLE unblockPopJQueue #-}
 
 blockPopJQueue :: MonadIO m => JQueue m a -> m ()
-blockPopJQueue (JQueue _ lock) = liftIO $ takeMVar lock
+blockPopJQueue (JQueue _ lock) = takeMVar lock
 {-# INLINEABLE blockPopJQueue #-}
 
 -- | Clears any jobs that haven't been started yet. Returns the number of jobs that are
 -- still in progress and have not been yet been completed.
 clearPendingJQueue :: MonadIO m => JQueue m a -> m ()
 clearPendingJQueue (JQueue queueRef _) =
-  liftIO $ atomicModifyRef_ queueRef $ \queue -> (queue {qQueue = [], qStack = []})
+  atomicModifyRefCAS_ queueRef $ \queue -> (queue {qQueue = [], qStack = []})
 {-# INLINEABLE clearPendingJQueue #-}
 
 
 -- | Extracts all results available up to now, the uncomputed ones are discarded. This
 -- also has an affect of resetting the total job count to zero.
 readResults :: MonadIO m => JQueue m a -> m [a]
-readResults (JQueue jQueueRef _) =
-  liftIO $ do
-    results <-
-      atomicModifyRef jQueueRef $ \queue ->
-        (queue {qQueue = [], qStack = [], qResults = []}, qResults queue)
-    catMaybes <$> mapM readRef results
+readResults (JQueue jQueueRef _) = do
+  results <-
+    atomicModifyRefCAS jQueueRef $ \queue ->
+      (queue {qQueue = [], qStack = [], qResults = []}, qResults queue)
+  catMaybes <$> mapM readRef results
 {-# INLINEABLE readResults #-}
 
 
+
+atomicModifyRefCAS :: MonadPrim RW m => Ref a RW -> (a -> (a, b)) -> m b
+atomicModifyRefCAS ref f = liftIO $ atomicModifyIORefCAS (toIORef ref) f
+{-# INLINEABLE atomicModifyRefCAS #-}
+
+atomicModifyRefCAS_ :: MonadPrim RW m => Ref t RW -> (t -> t) -> m ()
+atomicModifyRefCAS_ ref f = liftIO $ atomicModifyIORefCAS_ (toIORef ref) f
+{-# INLINEABLE atomicModifyRefCAS_ #-}
