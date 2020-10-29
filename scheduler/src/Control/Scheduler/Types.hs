@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE Unsafe #-}
 {-# OPTIONS_HADDOCK hide, not-home #-}
 -- |
@@ -34,6 +35,7 @@ import Control.Prim.Concurrent.MVar
 import Control.Prim.Exception
 import Control.Scheduler.Computation
 import Control.Scheduler.Queue
+import Data.Prim.Class
 import Data.Prim.Array
 import Data.Prim.PVar
 import Data.Prim.Ref
@@ -143,6 +145,11 @@ data WorkerStates ws = WorkerStates
 newtype BatchId = BatchId { getBatchId :: Int }
   deriving (Show, Eq, Ord)
 
+instance Prim BatchId where
+  type PrimBase BatchId = Int
+
+instance Atomic BatchId
+instance AtomicCount BatchId
 
 -- | Batch is an artifical checkpoint that can be controlled by the user throughout the
 -- lifetime of a scheduler.
@@ -153,7 +160,6 @@ data Batch m a = Batch
   , batchCancelWith :: a -> m Bool
   , batchHasFinished :: m Bool
   }
-
 
 -- | A thread safe wrapper around `Scheduler`, which allows it to be reused indefinitely
 -- and globally if need be. There is one already created in this library:

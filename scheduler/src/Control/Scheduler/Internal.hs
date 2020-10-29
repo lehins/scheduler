@@ -113,12 +113,12 @@ trivialScheduler_ =
 withTrivialSchedulerR :: MonadPrim s m => (Scheduler m a -> m b) -> m (Results a)
 withTrivialSchedulerR action = do
   resRef <- newRef []
-  batchRef <- newRef $ BatchId 0
+  batchRef <- newPVar $ BatchId 0
   finResRef <- newRef Nothing
   batchEarlyRef <- newRef Nothing
-  let bumpCurrentBatchId = atomicModifyRef batchRef (\(BatchId x) -> (BatchId (x + 1), ()))
+  let bumpCurrentBatchId = atomicAddPVar_ batchRef (BatchId 1)
       bumpBatchId (BatchId c) =
-        atomicModifyRef batchRef $ \b@(BatchId x) ->
+        atomicModifyPVar batchRef $ \b@(BatchId x) ->
           if x == c
             then (BatchId (x + 1), True)
             else (b, False)
@@ -142,7 +142,7 @@ withTrivialSchedulerR action = do
           rs <- collectResults mEarly . pure =<< takeResults
           rs <$ bumpCurrentBatchId
       , _earlyResults = readRef finResRef
-      , _currentBatchId = readRef batchRef
+      , _currentBatchId = readPVar batchRef
       , _batchEarly = takeBatchEarly
       , _cancelBatch =
           \batchId early -> do
@@ -165,12 +165,12 @@ withTrivialSchedulerR action = do
 withTrivialSchedulerRIO :: MonadUnliftIO m => (Scheduler m a -> m b) -> m (Results a)
 withTrivialSchedulerRIO action = do
   resRef <- newRef []
-  batchRef <- newRef $ BatchId 0
+  batchRef <- newPVar $ BatchId 0
   finResRef <- newRef Nothing
   batchEarlyRef <- newRef Nothing
-  let bumpCurrentBatchId = atomicModifyRef_ (coerce batchRef) (+ (1 :: Int))
+  let bumpCurrentBatchId = atomicAddPVar_ batchRef (coerce (1 :: Int))
       bumpBatchId (BatchId c) =
-        atomicModifyRef batchRef $ \b@(BatchId x) ->
+        atomicModifyPVar batchRef $ \b@(BatchId x) ->
           if x == c
             then (BatchId (x + 1), True)
             else (b, False)
@@ -194,7 +194,7 @@ withTrivialSchedulerRIO action = do
                 rs <- collectResults mEarly . pure =<< takeResults
                 rs <$ bumpCurrentBatchId
           , _earlyResults = readRef finResRef
-          , _currentBatchId = readRef batchRef
+          , _currentBatchId = readPVar batchRef
           , _batchEarly = takeBatchEarly
           , _cancelBatch =
               \batchId early -> do
@@ -295,7 +295,7 @@ initScheduler comp submitWork collect = do
   jobsQueueCount <- newPVar 1
   jobsSchedulerStatus <- newEmptyMVar
   earlyTerminationResultRef <- newRef Nothing
-  batchIdRef <- newRef $ BatchId 0
+  batchIdRef <- newPVar $ BatchId 0
   batchEarlyRef <- newRef Nothing
   let jobs =
         Jobs
@@ -304,9 +304,9 @@ initScheduler comp submitWork collect = do
           , jobsQueueCount = jobsQueueCount
           , jobsSchedulerStatus = jobsSchedulerStatus
           }
-      bumpCurrentBatchId = atomicModifyRef_ (coerce batchIdRef) (+ (1 :: Int))
+      bumpCurrentBatchId = atomicAddPVar_ batchIdRef (coerce (1 :: Int))
       bumpBatchId (BatchId c) =
-        atomicModifyRef batchIdRef $ \b@(BatchId x) ->
+        atomicModifyPVar batchIdRef $ \b@(BatchId x) ->
           if x == c
             then (BatchId (x + 1), True)
             else (b, False)
@@ -344,7 +344,7 @@ initScheduler comp submitWork collect = do
                        res `seq` collectResults mEarly (pure res)
                  rs <$ atomicWritePVar jobsQueueCount 1
           , _earlyResults = readRef earlyTerminationResultRef
-          , _currentBatchId = readRef batchIdRef
+          , _currentBatchId = readPVar batchIdRef
           , _batchEarly = readRef batchEarlyRef
           , _cancelBatch =
               \batchId early -> do
