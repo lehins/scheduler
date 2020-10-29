@@ -75,7 +75,7 @@ withSchedulerWSInternal ::
 withSchedulerWSInternal withScheduler' states action = bracket lockState unlockState runSchedulerWS
   where
     mutex = _workerStatesMutex states
-    lockState = atomicModifyRef mutex $ (,) True
+    lockState = atomicModifyRefCAS mutex $ (,) True
     unlockState wasLocked
       | wasLocked = pure ()
       | otherwise = atomicWriteRef mutex False
@@ -182,7 +182,7 @@ withTrivialSchedulerRIO action = do
           , _scheduleWorkId =
               \f -> do
                 r <- f (WorkerId 0)
-                r `seq` atomicModifyRef_ resRef (r :)
+                r `seq` atomicModifyRefCAS_ resRef (r :)
           , _terminate =
               \ !early -> do
                 bumpCurrentBatchId
@@ -327,7 +327,7 @@ initScheduler comp submitWork collect = do
               do scheduleJobs_ jobs (\_ -> atomicSubPVar_ jobsQueueCount 1)
                  unblockPopJQueue jobsQueue
                  status <- takeMVar jobsSchedulerStatus
-                 mEarly <- atomicModifyRef batchEarlyRef $ (,) Nothing
+                 mEarly <- atomicModifyRefCAS batchEarlyRef $ (,) Nothing
                  rs <-
                    case status of
                      SchedulerWorkerException (WorkerException exc) ->
@@ -370,37 +370,34 @@ withSchedulerInternal comp submitWork collect onScheduler = do
   (jobs@Jobs {..}, mkScheduler) <- initScheduler comp submitWork collect
   -- / Wait for the initial jobs to get scheduled before spawining off the workers, otherwise it
   -- would be trickier to identify the beginning and the end of a job pool.
-  withRunInIO $ \run -> do
-    bracket (run (spawnWorkers jobs comp)) terminateWorkers $ \tids ->
-      let scheduler = mkScheduler tids
-          readEarlyTermination =
-            _earlyResults scheduler >>= \case
-              Nothing -> error "Impossible: uninitialized early termination value"
-              Just rs -> pure rs
-       in try (run (onScheduler scheduler)) >>= \case
-            Left TerminateEarlyException -> run readEarlyTermination
-            Right _ -> do
-              run $ scheduleJobs_ jobs (\_ -> atomicSubPVar_ jobsQueueCount 1)
-              run $ unblockPopJQueue jobsQueue
-              status <- takeMVar jobsSchedulerStatus
-                -- \ wait for all worker to finish. If any one of the workers had a problem, then
-                -- this MVar will contain an exception
-              case status of
-                SchedulerWorkerException (WorkerException exc)
-                  | Just TerminateEarlyException <- fromException exc -> run readEarlyTermination
-                  | Just CancelBatchException <- fromException exc ->
-                    run $ do
-                      mEarly <- _batchEarly scheduler
-                      collectResults mEarly (collect jobsQueue)
-                  | otherwise -> throw exc
-                  -- \ Here we need to unwrap the legit worker exception and rethrow it, so
-                  -- the main thread will think like it's his own
-                SchedulerIdle ->
-                  run $ do
-                    mEarly <- _batchEarly scheduler
-                    collectResults mEarly (collect jobsQueue)
-                  -- \ Now we are sure all workers have done their job we can safely read
-                  -- all of the Refs with results
+  bracket (spawnWorkers jobs comp) terminateWorkers $ \tids ->
+    let scheduler = mkScheduler tids
+        readEarlyTermination =
+          _earlyResults scheduler >>= \case
+            Nothing -> error "Impossible: uninitialized early termination value"
+            Just rs -> pure rs
+     in try (onScheduler scheduler) >>= \case
+          Left TerminateEarlyException -> readEarlyTermination
+          Right _ -> do
+            scheduleJobs_ jobs (\_ -> atomicSubPVar_ jobsQueueCount 1)
+            unblockPopJQueue jobsQueue
+            status <- takeMVar jobsSchedulerStatus
+              -- \ wait for all worker to finish. If any one of the workers had a problem,
+              -- then this MVar will contain an exception
+            case status of
+              SchedulerWorkerException (WorkerException exc)
+                | Just TerminateEarlyException <- fromException exc -> readEarlyTermination
+                | Just CancelBatchException <- fromException exc -> do
+                  mEarly <- _batchEarly scheduler
+                  collectResults mEarly (collect jobsQueue)
+                | otherwise -> throw exc
+                -- \ Here we need to unwrap the legit worker exception and rethrow it, so
+                -- the main thread will think like it's his own
+              SchedulerIdle -> do
+                mEarly <- _batchEarly scheduler
+                collectResults mEarly (collect jobsQueue)
+                -- \ Now we are sure all workers have done their job we can safely read
+                -- all of the Refs with results
 {-# INLINEABLE withSchedulerInternal #-}
 
 
