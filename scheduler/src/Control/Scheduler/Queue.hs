@@ -1,5 +1,6 @@
 {-# OPTIONS_HADDOCK hide, not-home #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
@@ -27,20 +28,18 @@ module Control.Scheduler.Queue
   , unblockPopJQueue
   ) where
 
-import Control.Concurrent.MVar
-import Control.Monad (join)
-import Control.Monad.IO.Unlift
-import Data.Atomics (atomicModifyIORefCAS, atomicModifyIORefCAS_)
+import Control.Prim.Concurrent.MVar
+import Control.Prim.Monad
 import Data.Maybe
-import Data.IORef
+import Data.Prim.Ref
 
--- | A blocking unbounded queue that keeps the jobs in FIFO order and the results IORefs
+-- | A blocking unbounded queue that keeps the jobs in FIFO order and the results Refs
 -- in reversed
 data Queue m a = Queue
   { qQueue   :: ![Job m a]
   , qStack   :: ![Job m a]
-  , qResults :: ![IORef (Maybe a)]
-  , qBaton   :: {-# UNPACK #-}!(MVar ())
+  , qResults :: ![Ref (Maybe a) RW]
+  , qBaton   :: {-# UNPACK #-}!(MVar () RW)
   }
 
 
@@ -65,20 +64,20 @@ popQueue queue =
 {-# INLINEABLE popQueue #-}
 
 data Job m a
-  = Job {-# UNPACK #-} !(IORef (Maybe a)) (WorkerId -> m ())
+  = Job {-# UNPACK #-} !(Ref (Maybe a) RW) (WorkerId -> m ())
   | Job_ (WorkerId -> m ())
 
 
 mkJob :: MonadIO m => ((a -> m ()) -> WorkerId -> m ()) -> m (Job m a)
 mkJob action = do
-  resRef <- liftIO $ newIORef Nothing
-  return $ Job resRef (action (liftIO . writeIORef resRef . Just))
+  resRef <- liftIO $ newRef Nothing
+  return $ Job resRef (action (liftIO . writeRef resRef . Just))
 {-# INLINEABLE mkJob #-}
 
 data JQueue m a =
   JQueue
-    { jqQueueRef :: {-# UNPACK #-}!(IORef (Queue m a))
-    , jqLock     :: {-# UNPACK #-}!(MVar ())
+    { jqQueueRef :: {-# UNPACK #-}!(Ref (Queue m a) RW)
+    , jqLock     :: {-# UNPACK #-}!(MVar () RW)
     }
 
 newJQueue :: MonadIO m => m (JQueue m a)
@@ -86,7 +85,7 @@ newJQueue =
   liftIO $ do
     newLock <- newEmptyMVar
     newBaton <- newEmptyMVar
-    queueRef <- newIORef (Queue [] [] [] newBaton)
+    queueRef <- newRef (Queue [] [] [] newBaton)
     return $ JQueue queueRef newLock
 
 -- | Pushes an item onto a queue and returns the previous count.
@@ -95,12 +94,12 @@ pushJQueue (JQueue jQueueRef _) job =
   liftIO $ do
     newBaton <- newEmptyMVar
     join $
-      atomicModifyIORefCAS jQueueRef $ \queue@Queue {qStack, qResults, qBaton} ->
+      atomicModifyRef jQueueRef $ \queue@Queue {qStack, qResults, qBaton} ->
         ( queue
             { qResults =
                 case job of
                   Job resRef _ -> resRef : qResults
-                  _ -> qResults
+                  _            -> qResults
             , qStack = job : qStack
             , qBaton = newBaton
             }
@@ -115,7 +114,7 @@ popJQueue (JQueue jQueueRef lock) = liftIO inner
     inner = do
       readMVar lock
       join $
-        atomicModifyIORefCAS jQueueRef $ \queue@Queue {qBaton} ->
+        atomicModifyRef jQueueRef $ \queue@Queue {qBaton} ->
           case popQueue queue of
             Nothing -> (queue, readMVar qBaton >> inner)
             Just (job, newQueue) ->
@@ -137,7 +136,7 @@ blockPopJQueue (JQueue _ lock) = liftIO $ takeMVar lock
 -- still in progress and have not been yet been completed.
 clearPendingJQueue :: MonadIO m => JQueue m a -> m ()
 clearPendingJQueue (JQueue queueRef _) =
-  liftIO $ atomicModifyIORefCAS_ queueRef $ \queue -> (queue {qQueue = [], qStack = []})
+  liftIO $ atomicModifyRef_ queueRef $ \queue -> (queue {qQueue = [], qStack = []})
 {-# INLINEABLE clearPendingJQueue #-}
 
 
@@ -147,9 +146,9 @@ readResults :: MonadIO m => JQueue m a -> m [a]
 readResults (JQueue jQueueRef _) =
   liftIO $ do
     results <-
-      atomicModifyIORefCAS jQueueRef $ \queue ->
+      atomicModifyRef jQueueRef $ \queue ->
         (queue {qQueue = [], qStack = [], qResults = []}, qResults queue)
-    catMaybes <$> mapM readIORef results
+    catMaybes <$> mapM readRef results
 {-# INLINEABLE readResults #-}
 
 

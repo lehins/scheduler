@@ -29,14 +29,14 @@ module Control.Scheduler.Types
   , MutexException(..)
   ) where
 
-import Control.Concurrent (ThreadId)
-import Control.Concurrent.MVar
-import Control.Exception
+import Control.Prim.Concurrent (ThreadId)
+import Control.Prim.Concurrent.MVar
+import Control.Prim.Exception
 import Control.Scheduler.Computation
 import Control.Scheduler.Queue
-import Data.IORef
-import Data.Primitive.SmallArray
-import Data.Primitive.PVar
+import Data.Prim.Array
+import Data.Prim.PVar
+import Data.Prim.Ref
 
 -- | Computed results of scheduled jobs.
 --
@@ -55,38 +55,34 @@ data Results a
 instance Functor Results where
   fmap f =
     \case
-      Finished xs -> Finished (fmap f xs)
-      FinishedEarly xs x -> FinishedEarly (fmap f xs) (f x)
+      Finished xs         -> Finished (fmap f xs)
+      FinishedEarly xs x  -> FinishedEarly (fmap f xs) (f x)
       FinishedEarlyWith x -> FinishedEarlyWith (f x)
 
 instance Foldable Results where
   foldr f acc =
     \case
-      Finished xs -> foldr f acc xs
-      FinishedEarly xs x -> foldr f (f x acc) xs
+      Finished xs         -> foldr f acc xs
+      FinishedEarly xs x  -> foldr f (f x acc) xs
       FinishedEarlyWith x -> f x acc
   foldr1 f =
     \case
-      Finished xs -> foldr1 f xs
-      FinishedEarly xs x -> foldr f x xs
+      Finished xs         -> foldr1 f xs
+      FinishedEarly xs x  -> foldr f x xs
       FinishedEarlyWith x -> x
 
 instance Traversable Results where
   traverse f =
     \case
-      Finished xs -> Finished <$> traverse f xs
-      FinishedEarly xs x -> FinishedEarly <$> traverse f xs <*> f x
+      Finished xs         -> Finished <$> traverse f xs
+      FinishedEarly xs x  -> FinishedEarly <$> traverse f xs <*> f x
       FinishedEarlyWith x -> FinishedEarlyWith <$> f x
 
 data Jobs m a = Jobs
-  { jobsNumWorkers       :: {-# UNPACK #-} !Int
-  , jobsQueue            :: !(JQueue m a)
-#if MIN_VERSION_pvar(1,0,0)
-  , jobsQueueCount       :: !(PVar Int RealWorld)
-#else
-  , jobsQueueCount       :: !(PVar IO Int)
-#endif
-  , jobsSchedulerStatus  :: !(MVar SchedulerStatus)
+  { jobsNumWorkers      :: {-# UNPACK #-} !Int
+  , jobsQueue           :: !(JQueue m a)
+  , jobsQueueCount      :: !(PVar Int RW)
+  , jobsSchedulerStatus :: !(MVar SchedulerStatus RW)
   }
 
 
@@ -99,7 +95,7 @@ data Early a
   -- ^ Only this value will be returned all other results will get discarded
 
 unEarly :: Early a -> a
-unEarly (Early r) = r
+unEarly (Early r)     = r
 unEarly (EarlyWith r) = r
 
 -- | Main type for scheduling work. See `Control.Scheduler.withScheduler` or
@@ -126,8 +122,8 @@ data Scheduler m a = Scheduler
 -- `Control.Scheduler.withSchedulerWS_` for ways to construct and use this data type.
 --
 -- @since 1.4.0
-data SchedulerWS s m a = SchedulerWS
-  { _workerStates :: !(WorkerStates s)
+data SchedulerWS ws m a = SchedulerWS
+  { _workerStates :: !(WorkerStates ws)
   , _getScheduler :: !(Scheduler m a)
   }
 
@@ -137,10 +133,10 @@ data SchedulerWS s m a = SchedulerWS
 -- `Control.Scheduler.initWorkerStates`
 --
 -- @since 1.4.0
-data WorkerStates s = WorkerStates
+data WorkerStates ws = WorkerStates
   { _workerStatesComp  :: !Comp
-  , _workerStatesArray :: !(SmallArray s)
-  , _workerStatesMutex :: !(IORef Bool)
+  , _workerStatesArray :: !(SBArray ws)
+  , _workerStatesMutex :: !(Ref Bool RW)
   }
 
 -- | This identifier is needed for tracking batches.
@@ -166,9 +162,9 @@ data Batch m a = Batch
 -- @since 1.5.0
 data GlobalScheduler m =
   GlobalScheduler
-    { globalSchedulerComp :: !Comp
-    , globalSchedulerMVar :: !(MVar (Scheduler m ()))
-    , globalSchedulerThreadIdsRef :: !(IORef [ThreadId])
+    { globalSchedulerComp         :: !Comp
+    , globalSchedulerMVar         :: !(MVar (Scheduler m ()) RW)
+    , globalSchedulerThreadIdsRef :: !(Ref [ThreadId] RW)
     }
 
 
