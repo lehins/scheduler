@@ -18,11 +18,7 @@ import Streamly (asyncly)
 import qualified Streamly.Prelude as S
 import UnliftIO.Async (pooledMapConcurrently, pooledReplicateConcurrently)
 
-import System.IO.Unsafe (unsafePerformIO)
 
-globalScheduler :: GlobalScheduler IO
-globalScheduler = unsafePerformIO (newGlobalScheduler Par)
-{-# NOINLINE globalScheduler #-}
 
 main :: IO ()
 main = do

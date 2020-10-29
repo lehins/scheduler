@@ -79,7 +79,7 @@ withSchedulerWSInternal withScheduler' states action =
   withRunInIO $ \run -> bracket lockState unlockState (run . runSchedulerWS)
   where
     mutex = _workerStatesMutex states
-    lockState = atomicModifyIORefCAS mutex ((,) True)
+    lockState = atomicModifyIORefCAS mutex $ (,) True
     unlockState wasLocked
       | wasLocked = pure ()
       | otherwise = atomicWriteIORef mutex False

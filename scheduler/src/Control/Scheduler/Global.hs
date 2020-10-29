@@ -11,6 +11,7 @@
 module Control.Scheduler.Global
   ( -- * This module is still experimental and the API is likely to change.
     GlobalScheduler
+  , globalScheduler
   , newGlobalScheduler
   , withGlobalScheduler_
   ) where
@@ -25,7 +26,13 @@ import Control.Scheduler
 import Control.Scheduler.Internal
 import Control.Scheduler.Types
 import Data.IORef
+import System.IO.Unsafe (unsafePerformIO)
 
+-- | Global scheduler with `Par` computation scheduler that can be used anytime using
+-- `withGlobalScheduler_`
+globalScheduler :: GlobalScheduler IO
+globalScheduler = unsafePerformIO (newGlobalScheduler Par)
+{-# NOINLINE globalScheduler #-}
 
 initGlobalScheduler ::
      MonadUnliftIO m => Comp -> (Scheduler m a -> [ThreadId] -> m b) -> m b
