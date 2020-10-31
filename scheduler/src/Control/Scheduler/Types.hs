@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE Unsafe #-}
 {-# OPTIONS_HADDOCK hide, not-home #-}
@@ -77,7 +78,11 @@ instance Traversable Results where
 data Jobs m a = Jobs
   { jobsNumWorkers       :: {-# UNPACK #-} !Int
   , jobsQueue            :: !(JQueue m a)
+#if MIN_VERSION_pvar(1,0,0)
+  , jobsQueueCount       :: !(PVar Int RealWorld)
+#else
   , jobsQueueCount       :: !(PVar IO Int)
+#endif
   , jobsSchedulerStatus  :: !(MVar SchedulerStatus)
   }
 

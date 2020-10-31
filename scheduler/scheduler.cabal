@@ -28,7 +28,7 @@ library
                      , exceptions
                      , unliftio-core
                      , primitive      >= 0.6.4
-                     , pvar           == 0.*
+                     , pvar           < 2.0
   default-language:    Haskell2010
   ghc-options:         -Wall
 
