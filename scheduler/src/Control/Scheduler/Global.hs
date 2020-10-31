@@ -2,7 +2,7 @@
 {-# LANGUAGE RecordWildCards #-}
 -- |
 -- Module      : Control.Scheduler.Global
--- Copyright   : (c) Alexey Kuleshevich 2018-2020
+-- Copyright   : (c) Alexey Kuleshevich 2020
 -- License     : BSD3
 -- Maintainer  : Alexey Kuleshevich <lehins@yandex.ru>
 -- Stability   : experimental
@@ -34,6 +34,7 @@ globalScheduler :: GlobalScheduler IO
 globalScheduler = unsafePerformIO (newGlobalScheduler Par)
 {-# NOINLINE globalScheduler #-}
 
+
 initGlobalScheduler ::
      MonadUnliftIO m => Comp -> (Scheduler m a -> [ThreadId] -> m b) -> m b
 initGlobalScheduler comp action = do
@@ -41,6 +42,12 @@ initGlobalScheduler comp action = do
   safeBracketOnError (spawnWorkers jobs comp) (liftIO . terminateWorkers) $ \tids ->
     action (mkScheduler tids) tids
 
+
+-- | Create a new global scheduler, in case a single one `globalScheduler` is not
+-- sufficient. It is important to note that too much parallelization can significantly
+-- degrate performance, therefore it is best not to use more than one scheduler at a time.
+--
+-- @since 1.5.0
 newGlobalScheduler :: MonadUnliftIO m => Comp -> m (GlobalScheduler m)
 newGlobalScheduler comp =
   initGlobalScheduler comp $ \scheduler tids ->
@@ -55,7 +62,11 @@ newGlobalScheduler comp =
           , globalSchedulerThreadIdsRef = tidsRef
           }
 
--- | Use the global scheduler if one is availiable, otherwise initialize a temporary one.
+-- | Use the global scheduler if it is not busy, otherwise initialize a temporary one. It
+-- means that this function by itself will not block, but if the same global scheduler
+-- used concurrently other schedulers might get created.
+--
+-- @since 1.5.0
 withGlobalScheduler_ :: MonadUnliftIO m => GlobalScheduler m -> (Scheduler m () -> m a) -> m ()
 withGlobalScheduler_ GlobalScheduler {..} action =
   withRunInIO $ \run -> do
