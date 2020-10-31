@@ -100,10 +100,10 @@ trivialScheduler_ =
     { _numWorkers = 1
     , _scheduleWorkId = \f -> f (WorkerId 0)
     , _terminate = const $ pure ()
-    , _waitForBatch = pure $ Finished []
+    , _waitForCurrentBatch = pure $ Finished []
     , _earlyResults = pure Nothing
     , _currentBatchId = pure $ BatchId 0
-    , _cancelCurrentBatch = const $ pure ()
+    , _cancelBatch = \_ _ -> pure False
     , _batchEarly = pure Nothing
     }
 
@@ -119,7 +119,12 @@ withTrivialSchedulerR action = do
   batchVar <- newMutVar $ BatchId 0
   finResVar <- newMutVar Nothing
   batchEarlyVar <- newMutVar Nothing
-  let bumpBatchId = atomicModifyMutVar' batchVar (\(BatchId x) -> (BatchId (x + 1), ()))
+  let bumpCurrentBatchId = atomicModifyMutVar' batchVar (\(BatchId x) -> (BatchId (x + 1), ()))
+      bumpBatchId (BatchId c) =
+        atomicModifyMutVar' batchVar $ \b@(BatchId x) ->
+          if x == c
+            then (BatchId (x + 1), True)
+            else (b, False)
       takeBatchEarly = atomicModifyMutVar' batchEarlyVar $ \mEarly -> (Nothing, mEarly)
       takeResults = atomicModifyMutVar' resVar $ \res -> ([], res)
   _ <-
@@ -129,19 +134,24 @@ withTrivialSchedulerR action = do
       , _scheduleWorkId =
           \f -> do
             r <- f (WorkerId 0)
-            r `seq` bumpBatchId >> atomicModifyMutVar' resVar (\rs -> (r : rs, ()))
+            r `seq` atomicModifyMutVar' resVar (\rs -> (r : rs, ()))
       , _terminate =
           \early -> do
+            bumpCurrentBatchId
             finishEarly <- collectResults (Just early) takeResults
-            unEarly early <$ bumpBatchId <* writeMutVar finResVar (Just finishEarly)
-      , _waitForBatch =
-          do bumpBatchId
-             mEarly <- takeBatchEarly
+            unEarly early <$ writeMutVar finResVar (Just finishEarly)
+      , _waitForCurrentBatch =
+          do mEarly <- takeBatchEarly
+             bumpCurrentBatchId
              collectResults mEarly . pure =<< takeResults
       , _earlyResults = readMutVar finResVar
       , _currentBatchId = readMutVar batchVar
       , _batchEarly = takeBatchEarly
-      , _cancelCurrentBatch = \early -> writeMutVar batchEarlyVar (Just early) >> bumpBatchId
+      , _cancelBatch =
+          \batchId early -> do
+            b <- bumpBatchId batchId
+            when b $ writeMutVar batchEarlyVar (Just early)
+            pure b
       }
   readMutVar finResVar >>= \case
     Just rs -> pure $ reverseResults rs
@@ -159,7 +169,12 @@ withTrivialSchedulerRIO action = do
   batchRef <- liftIO $ newIORef $ BatchId 0
   finResRef <- liftIO $ newIORef Nothing
   batchEarlyRef <- liftIO $ newIORef Nothing
-  let bumpBatchId = atomicModifyIORefCAS_ (coerce batchRef) (+ (1 :: Int))
+  let bumpCurrentBatchId = atomicModifyIORefCAS_ (coerce batchRef) (+ (1 :: Int))
+      bumpBatchId (BatchId c) =
+        atomicModifyIORefCAS batchRef $ \b@(BatchId x) ->
+          if x == c
+            then (BatchId (x + 1), True)
+            else (b, False)
       takeBatchEarly = atomicModifyIORefCAS batchEarlyRef $ \mEarly -> (Nothing, mEarly)
       takeResults = atomicModifyIORefCAS resRef $ \res -> ([], res)
       scheduler =
@@ -172,19 +187,23 @@ withTrivialSchedulerRIO action = do
           , _terminate =
               \ !early ->
                 liftIO $ do
+                  bumpCurrentBatchId
                   finishEarly <- collectResults (Just early) takeResults
-                  bumpBatchId <* atomicWriteIORef finResRef (Just finishEarly)
+                  atomicWriteIORef finResRef (Just finishEarly)
                   throwIO TerminateEarlyException
-          , _waitForBatch =
+          , _waitForCurrentBatch =
               liftIO $ do
-                bumpBatchId
+                bumpCurrentBatchId
                 mEarly <- takeBatchEarly
                 collectResults mEarly . pure =<< takeResults
           , _earlyResults = liftIO (readIORef finResRef)
           , _currentBatchId = liftIO (readIORef batchRef)
           , _batchEarly = liftIO takeBatchEarly
-          , _cancelCurrentBatch =
-              \early -> liftIO (atomicWriteIORef batchEarlyRef (Just early) >> bumpBatchId)
+          , _cancelBatch =
+              \batchId early -> liftIO $ do
+                b <- bumpBatchId batchId
+                when b $ atomicWriteIORef batchEarlyRef (Just early)
+                pure b
           }
   _ :: Either TerminateEarlyException b <- withRunInIO $ \run -> try $ run $ action scheduler
   liftIO (readIORef finResRef) >>= \case
@@ -290,7 +309,12 @@ initScheduler comp submitWork collect = do
           , jobsQueueCount = jobsQueueCount
           , jobsSchedulerStatus = jobsSchedulerStatus
           }
-      bumpBatchId = atomicModifyIORefCAS_ (coerce batchIdRef) (+ (1 :: Int))
+      bumpCurrentBatchId = atomicModifyIORefCAS_ (coerce batchIdRef) (+ (1 :: Int))
+      bumpBatchId (BatchId c) =
+        atomicModifyIORefCAS batchIdRef $ \b@(BatchId x) ->
+          if x == c
+            then (BatchId (x + 1), True)
+            else (b, False)
       mkScheduler tids =
         Scheduler
           { _numWorkers = jobsNumWorkers
@@ -302,10 +326,10 @@ initScheduler comp submitWork collect = do
                     Early r -> FinishedEarly <$> collect jobsQueue <*> pure r
                     EarlyWith r -> pure $ FinishedEarlyWith r
                 liftIO $ do
-                  bumpBatchId
+                  bumpCurrentBatchId
                   atomicWriteIORef earlyTerminationResultRef $ Just finishEarly
                   throwIO TerminateEarlyException
-          , _waitForBatch =
+          , _waitForCurrentBatch =
               do scheduleJobs_ jobs (\_ -> liftIO $ void $ atomicSubIntPVar jobsQueueCount 1)
                  unblockPopJQueue jobsQueue
                  status <- liftIO $ takeMVar jobsSchedulerStatus
@@ -322,20 +346,22 @@ initScheduler comp submitWork collect = do
                          Nothing -> liftIO $ throwIO exc
                      SchedulerIdle -> do
                        blockPopJQueue jobsQueue
-                       liftIO bumpBatchId
+                       liftIO bumpCurrentBatchId
                        res <- collect jobsQueue
                        res `seq` collectResults mEarly (pure res)
                  rs <$ liftIO (atomicWriteIntPVar jobsQueueCount 1)
           , _earlyResults = liftIO (readIORef earlyTerminationResultRef)
           , _currentBatchId = liftIO (readIORef batchIdRef)
           , _batchEarly = liftIO (readIORef batchEarlyRef)
-          , _cancelCurrentBatch =
-              \early -> do
-                blockPopJQueue jobsQueue
-                liftIO $ do
-                  atomicWriteIORef batchEarlyRef $ Just early
-                  bumpBatchId
-                  throwIO CancelBatchException
+          , _cancelBatch =
+              \batchId early -> do
+                b <- liftIO $ bumpBatchId batchId
+                when b $ do
+                  blockPopJQueue jobsQueue
+                  liftIO $ do
+                    atomicWriteIORef batchEarlyRef $ Just early
+                    throwIO CancelBatchException
+                pure b
           }
   pure (jobs, mkScheduler)
 {-# INLINEABLE initScheduler #-}

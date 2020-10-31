@@ -36,9 +36,9 @@ module Control.Scheduler
   , replicateWork
   -- * Batches
   , BatchId
-  , waitForBatch
-  , waitForBatch_
-  , waitForBatchR
+  , waitForCurrentBatch
+  , waitForCurrentBatch_
+  , waitForCurrentBatchR
   , getCurrentBatchId
   , cancelBatch
   , cancelBatch_
@@ -375,22 +375,24 @@ withScheduler_ comp = void . withSchedulerInternal comp scheduleJobs_ (const (pu
 -- function, which will also put the scheduler in a terminated state.
 --
 -- @since 1.5.0
-waitForBatch :: Functor m => Scheduler m a -> m [a]
-waitForBatch Scheduler {_waitForBatch} = reverse . resultsToList <$> _waitForBatch
+waitForCurrentBatch :: Functor m => Scheduler m a -> m [a]
+waitForCurrentBatch Scheduler {_waitForCurrentBatch} = reverse . resultsToList <$> _waitForCurrentBatch
 
--- | Same as `waitForBatch` but discard the results
+-- | Same as `waitForCurrentBatch` but discard the results
 --
 -- @since 1.5.0
-waitForBatch_ :: Monad m => Scheduler m a -> m ()
-waitForBatch_ Scheduler {_waitForBatch} = void _waitForBatch
+waitForCurrentBatch_ :: Monad m => Scheduler m a -> m ()
+waitForCurrentBatch_ Scheduler {_waitForCurrentBatch} = void _waitForCurrentBatch
 
--- | Same as `waitForBatch`, but returns the actual `Results` data type.
+-- | Same as `waitForCurrentBatch`, but returns the actual `Results` data type.
 --
 -- @since 1.5.0
-waitForBatchR :: Functor m => Scheduler m a -> m (Results a)
-waitForBatchR Scheduler {_waitForBatch} = reverseResults <$> _waitForBatch
+waitForCurrentBatchR :: Functor m => Scheduler m a -> m (Results a)
+waitForCurrentBatchR Scheduler {_waitForCurrentBatch} = reverseResults <$> _waitForCurrentBatch
 
 
+-- | Returns an opaque identifier for current batch of jobs, which can be used to either
+-- cancel the batch early or simply check if the batch has finished or not.
 --
 -- @since 1.5.0
 getCurrentBatchId :: Scheduler m a -> m BatchId
@@ -398,18 +400,18 @@ getCurrentBatchId = _currentBatchId
 
 --
 -- @since 1.5.0
-cancelBatch :: Scheduler m a -> a -> m ()
-cancelBatch scheduler a = _cancelCurrentBatch scheduler (Early a)
+cancelBatch :: Scheduler m a -> BatchId -> a -> m Bool
+cancelBatch scheduler batchId a = _cancelBatch scheduler batchId (Early a)
 
 --
 -- @since 1.5.0
-cancelBatch_ :: Scheduler m () -> m ()
-cancelBatch_ scheduler = _cancelCurrentBatch scheduler (Early ())
+cancelBatch_ :: Scheduler m () -> BatchId -> m Bool
+cancelBatch_ scheduler batchId = _cancelBatch scheduler batchId (Early ())
 
 --
 -- @since 1.5.0
-cancelBatchWith :: Scheduler m a -> a -> m ()
-cancelBatchWith scheduler a = _cancelCurrentBatch scheduler (EarlyWith a)
+cancelBatchWith :: Scheduler m a -> BatchId -> a -> m Bool
+cancelBatchWith scheduler batchId a = _cancelBatch scheduler batchId (EarlyWith a)
 
 --
 -- @since 1.5.0

@@ -84,7 +84,7 @@ withGlobalScheduler_ GlobalScheduler {..} action =
                 run $ do
                   _ <- action scheduler
                   mEarly <- _earlyResults scheduler
-                  mEarly <$ when (isNothing mEarly) (waitForBatch_ scheduler)
+                  mEarly <$ when (isNothing mEarly) (waitForCurrentBatch_ scheduler)
           mEarly <- restore runScheduler `onException` run initializeNewScheduler
           -- Whenever a scheduler is terminated it is no longer usable, need to re-initialize
           case mEarly of

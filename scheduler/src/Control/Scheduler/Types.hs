@@ -104,14 +104,14 @@ unEarly (EarlyWith r) = r
 --
 -- @since 1.0.0
 data Scheduler m a = Scheduler
-  { _numWorkers         :: {-# UNPACK #-} !Int
-  , _scheduleWorkId     :: (WorkerId -> m a) -> m ()
-  , _terminate          :: Early a -> m a
-  , _waitForBatch       :: m (Results a)
-  , _earlyResults       :: m (Maybe (Results a))
-  , _currentBatchId     :: m BatchId
-  , _cancelCurrentBatch :: Early a -> m ()
-  , _batchEarly         :: m (Maybe (Early a))
+  { _numWorkers          :: {-# UNPACK #-} !Int
+  , _scheduleWorkId      :: (WorkerId -> m a) -> m ()
+  , _terminate           :: Early a -> m a
+  , _waitForCurrentBatch :: m (Results a)
+  , _earlyResults        :: m (Maybe (Results a))
+  , _currentBatchId      :: m BatchId
+  , _cancelBatch         :: BatchId -> Early a -> m Bool
+  , _batchEarly          :: m (Maybe (Early a))
   }
 
 -- | This is a wrapper around `Scheduler`, but it also keeps a separate state for each
