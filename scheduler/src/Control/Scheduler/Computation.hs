@@ -15,7 +15,7 @@ module Control.Scheduler.Computation
   ( Comp(.., Par, Par'), compNumWorkers
   ) where
 
-import Control.DeepSeq (NFData(..), deepseq)
+import Control.Prim.Eval (NFData(..), deepseq)
 import Control.Prim.Concurrent (getNumCapabilities)
 import Control.Prim.Monad.Unsafe (unsafePerformIO)
 import Data.Prim
