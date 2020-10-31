@@ -75,7 +75,7 @@ withSchedulerWSInternal ::
 withSchedulerWSInternal withScheduler' states action = bracket lockState unlockState runSchedulerWS
   where
     mutex = _workerStatesMutex states
-    lockState = atomicModifyRefCAS mutex $ (,) True
+    lockState = atomicSwapRef mutex True
     unlockState wasLocked
       | wasLocked = pure ()
       | otherwise = atomicWriteRef mutex False
@@ -122,8 +122,8 @@ withTrivialSchedulerR action = do
           if x == c
             then (BatchId (x + 1), True)
             else (b, False)
-      takeBatchEarly = atomicModifyRef batchEarlyRef $ \mEarly -> (Nothing, mEarly)
-      takeResults = atomicModifyRef resRef $ \res -> ([], res)
+      takeBatchEarly = atomicSwapRef batchEarlyRef Nothing
+      takeResults = atomicSwapRef resRef []
   _ <-
     action $
     Scheduler
@@ -131,7 +131,7 @@ withTrivialSchedulerR action = do
       , _scheduleWorkId =
           \f -> do
             r <- f (WorkerId 0)
-            r `seq` atomicModifyRef resRef (\rs -> (r : rs, ()))
+            r `seq` atomicModifyRef_ resRef (r :)
       , _terminate =
           \early -> do
             bumpCurrentBatchId
@@ -174,15 +174,15 @@ withTrivialSchedulerRIO action = do
           if x == c
             then (BatchId (x + 1), True)
             else (b, False)
-      takeBatchEarly = atomicModifyRef batchEarlyRef $ \mEarly -> (Nothing, mEarly)
-      takeResults = atomicModifyRef resRef $ \res -> ([], res)
+      takeBatchEarly = atomicSwapRef batchEarlyRef Nothing
+      takeResults = atomicSwapRef resRef []
       scheduler =
         Scheduler
           { _numWorkers = 1
           , _scheduleWorkId =
               \f -> do
                 r <- f (WorkerId 0)
-                r `seq` atomicModifyRefCAS_ resRef (r :)
+                r `seq` atomicModifyRef_ resRef (r :)
           , _terminate =
               \ !early -> do
                 bumpCurrentBatchId
@@ -327,7 +327,7 @@ initScheduler comp submitWork collect = do
               do scheduleJobs_ jobs (\_ -> atomicSubPVar_ jobsQueueCount 1)
                  unblockPopJQueue jobsQueue
                  status <- takeMVar jobsSchedulerStatus
-                 mEarly <- atomicModifyRefCAS batchEarlyRef $ (,) Nothing
+                 mEarly <- atomicSwapRef batchEarlyRef Nothing
                  rs <-
                    case status of
                      SchedulerWorkerException (WorkerException exc) ->
