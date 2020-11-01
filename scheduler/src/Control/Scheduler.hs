@@ -176,7 +176,8 @@ numWorkers = _numWorkers
 -- | Schedule an action to be picked up and computed by a worker from a pool of
 -- jobs. Argument supplied to the job will be the id of the worker doing the job. This is
 -- useful for identification of a thread that will be doing the work, since there is
--- one-to-one mapping from `ThreadId` to `WorkerId`.
+-- one-to-one mapping from `Control.Concurrent.ThreadId` to `WorkerId` for a particular
+-- scheduler.
 --
 -- @since 1.2.0
 scheduleWorkId :: Scheduler m a -> (WorkerId -> m a) -> m ()
@@ -371,8 +372,9 @@ withScheduler_ comp = void . withSchedulerInternal comp scheduleJobs_ (const (pu
 -- | Wait for all scheduled jobs to be done and collect the computed results into a
 -- list. It is a blocking operation, but if there are no jobs in progress it will return
 -- immediately. It is safe to continue using the supplied scheduler after this function
--- returns, but if any of the jobs resulted in an exception it will be rethrown by this
--- function, which will also put the scheduler in a terminated state.
+-- returns. If any of the jobs resulted in an exception it will be rethrown by this
+-- function, which, unless caught, will also put the scheduler in a terminated state. This
+-- function also resets current `BatchId`
 --
 -- @since 1.5.0
 waitForCurrentBatch :: Functor m => Scheduler m a -> m [a]
@@ -398,21 +400,30 @@ waitForCurrentBatchR Scheduler {_waitForCurrentBatch} = reverseResults <$> _wait
 getCurrentBatchId :: Scheduler m a -> m BatchId
 getCurrentBatchId = _currentBatchId
 
+-- | Cancel batch with supplied identifier, which will lead to `waitForCurrentBatchR` to
+-- return `FinishedEarly` result. This is an idempotent operation and has no affect if currently
+-- running batch does not match supplied identifier. Returns `False` when cancelling did
+-- not succeed due to mismatched identifier or does not return at all since all jobs get
+-- cancelled immediately. For trivial schedulers however there is no way to perform
+-- concurrent cancelation and it will return `True`.
 --
 -- @since 1.5.0
 cancelBatch :: Scheduler m a -> BatchId -> a -> m Bool
 cancelBatch scheduler batchId a = _cancelBatch scheduler batchId (Early a)
 
+-- | Same as `cancelBatch`, but only works with schedulers that don't care about results
 --
 -- @since 1.5.0
 cancelBatch_ :: Scheduler m () -> BatchId -> m Bool
 cancelBatch_ scheduler batchId = _cancelBatch scheduler batchId (Early ())
 
+-- | Same as `cancelBatch_`, but the result of computation will be set to `FinishedEarlyWith`
 --
 -- @since 1.5.0
 cancelBatchWith :: Scheduler m a -> BatchId -> a -> m Bool
 cancelBatchWith scheduler batchId a = _cancelBatch scheduler batchId (EarlyWith a)
 
+-- | Check if the batch with suppplied identifier has already finished.
 --
 -- @since 1.5.0
 hasBatchFinished :: Functor m => Scheduler m a -> BatchId -> m Bool

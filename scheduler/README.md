@@ -7,7 +7,7 @@ threads to do the actual computation, this package is for you.
 
 | Language | Travis | Azure | Coveralls |
 |:--------:|:------:|:-----:|:---------:|
-| ![GitHub top language](https://img.shields.io/github/languages/top/lehins/haskell-scheduler.svg) | [![Travis](https://img.shields.io/travis/lehins/haskell-scheduler/master.svg?label=Linux%20%26%20OS%20X)](https://travis-ci.org/lehins/haskell-scheduler) | [![Build Status](https://dev.azure.com/kuleshevich/haskell-scheduler/_apis/build/status/lehins.haskell-scheduler?branchName=master)](https://dev.azure.com/kuleshevich/haskell-scheduler/_build?definitionId=1&branchName=master) | [![Coverage Status](https://coveralls.io/repos/github/lehins/haskell-scheduler/badge.svg?branch=master)](https://coveralls.io/github/lehins/haskell-scheduler?branch=master) |
+| ![GitHub top language](https://img.shields.io/github/languages/top/lehins/haskell-scheduler.svg) | [![Travis](https://img.shields.io/travis/lehins/haskell-scheduler/master.svg?label=Linux%20%26%20OS%20X)](https://travis-ci.org/lehins/haskell-scheduler) | [![Build Status](https://dev.azure.com/kuleshevich/haskell-scheduler/_apis/build/status/lehins.haskell-scheduler?branchName=master)](https://dev.azure.com/kuleshevich/haskell-scheduler/_build?branchName=master) | [![Coverage Status](https://coveralls.io/repos/github/lehins/haskell-scheduler/badge.svg?branch=master)](https://coveralls.io/github/lehins/haskell-scheduler?branch=master) |
 
 | Gihub | Hackage | Nightly | LTS |
 |:------|:-------:|:-------:|:---:|

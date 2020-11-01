@@ -136,10 +136,18 @@ data WorkerStates s = WorkerStates
   , _workerStatesMutex :: !(IORef Bool)
   }
 
-
+-- | Batch is an artifical checkpoint that can be controlled by the user throughout the
+-- lifetime of a scheduler.
+--
+-- @since 1.5.0
 newtype BatchId = BatchId { getBatchId :: Int }
   deriving (Show, Eq, Ord)
 
+-- | A thread safe wrapper around `Scheduler`, which allows it to be reused indefinitely
+-- and globeally if need be. There is one already created in this library:
+-- `Control.Scheduler.Global.globalSchdeuler`
+--
+-- @since 1.5.0
 data GlobalScheduler m =
   GlobalScheduler
     { globalSchedulerComp :: !Comp

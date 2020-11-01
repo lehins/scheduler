@@ -108,9 +108,10 @@ trivialScheduler_ =
     }
 
 
--- | This trivial scheduler will behave in a similar way as `withSchedulerR` with `Seq`
--- computation strategy, except it is restricted to `PrimMonad`, instead of
--- `MonadUnliftIO` and the work isn't scheduled, but rather computed immediately.
+-- | This trivial scheduler will behave in a similar way as
+-- `Control.Scheduler.withSchedulerR` with `Seq` computation strategy, except it is
+-- restricted to `PrimMonad`, instead of `MonadUnliftIO` and the work isn't scheduled, but
+-- rather computed immediately.
 --
 -- @since 1.4.2
 withTrivialSchedulerR :: PrimMonad m => (Scheduler m a -> m b) -> m (Results a)
@@ -161,8 +162,10 @@ withTrivialSchedulerR action = do
 
 
 
--- | Same as `withTrivialSchedulerIO`, but works in MonadIO and returns results in an
--- original LIFO order.
+-- | Same as `Control.Scheduler.withTrivialScheduler`, but works in `MonadUnliftIO` and
+-- returns results in an original LIFO order.
+--
+-- @since 1.4.2
 withTrivialSchedulerRIO :: MonadUnliftIO m => (Scheduler m a -> m b) -> m (Results a)
 withTrivialSchedulerRIO action = do
   resRef <- liftIO $ newIORef []
