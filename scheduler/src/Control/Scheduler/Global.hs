@@ -9,8 +9,7 @@
 -- Portability : non-portable
 --
 module Control.Scheduler.Global
-  ( -- * This module is still experimental and the API is likely to change.
-    GlobalScheduler
+  ( GlobalScheduler
   , globalScheduler
   , newGlobalScheduler
   , withGlobalScheduler_
@@ -28,7 +27,7 @@ import Control.Scheduler.Types
 import Data.IORef
 import System.IO.Unsafe (unsafePerformIO)
 
--- | Global scheduler with `Par` computation scheduler that can be used anytime using
+-- | Global scheduler with `Par` computation strategy that can be used anytime using
 -- `withGlobalScheduler_`
 globalScheduler :: GlobalScheduler IO
 globalScheduler = unsafePerformIO (newGlobalScheduler Par)

@@ -44,9 +44,11 @@ data Results a
   = Finished [a]
   -- ^ Finished normally with all scheduled jobs completed
   | FinishedEarly [a] !a
-  -- ^ Finished early by the means of `Control.Scheduler.terminate`.
+  -- ^ Finished early by the means of `Control.Scheduler.cancelBatch` or
+  -- `Control.Scheduler.terminate`.
   | FinishedEarlyWith !a
-  -- ^ Finished early by the means of `Control.Scheduler.terminateWith`.
+  -- ^ Finished early by the means of `Control.Scheduler.cancelBatchWith` or
+  -- `Control.Scheduler.terminateWith`.
   deriving (Show, Read, Eq)
 
 instance Functor Results where
@@ -144,7 +146,7 @@ newtype BatchId = BatchId { getBatchId :: Int }
   deriving (Show, Eq, Ord)
 
 -- | A thread safe wrapper around `Scheduler`, which allows it to be reused indefinitely
--- and globeally if need be. There is one already created in this library:
+-- and globally if need be. There is one already created in this library:
 -- `Control.Scheduler.Global.globalSchdeuler`
 --
 -- @since 1.5.0

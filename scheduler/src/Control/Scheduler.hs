@@ -353,6 +353,7 @@ withSchedulerR ::
   -> m (Results a)
 withSchedulerR Seq = fmap reverseResults . withTrivialSchedulerRIO
 withSchedulerR comp = fmap reverseResults . withSchedulerInternal comp scheduleJobs readResults
+{-# INLINE withSchedulerR #-}
 
 
 -- | Same as `withScheduler`, but discards results of submitted jobs.
@@ -428,6 +429,7 @@ cancelBatchWith scheduler batchId a = _cancelBatch scheduler batchId (EarlyWith 
 -- @since 1.5.0
 hasBatchFinished :: Functor m => Scheduler m a -> BatchId -> m Bool
 hasBatchFinished scheduler batchId = (batchId /=) <$> _currentBatchId scheduler
+{-# INLINE hasBatchFinished #-}
 
 {- $setup
 
