@@ -380,8 +380,8 @@ hasBatchFinished = batchHasFinished
 {-# INLINE hasBatchFinished #-}
 
 
--- | Cancel batch with supplied identifier, which will lead to `waitForCurrentBatchR` to
--- return `FinishedEarly` result. This is an idempotent operation and has no affect if currently
+-- | Cancel batch with supplied identifier, which will lead to scheduler to return
+-- `FinishedEarly` result. This is an idempotent operation and has no affect if currently
 -- running batch does not match supplied identifier. Returns `False` when cancelling did
 -- not succeed due to mismatched identifier or does not return at all since all jobs get
 -- cancelled immediately. For trivial schedulers however there is no way to perform
@@ -454,7 +454,7 @@ runBatch_ scheduler f = do
 {-# INLINE runBatch_ #-}
 
 
--- | Same as `runBatch`, except it produces `Result` instead of a list.
+-- | Same as `runBatch`, except it produces `Results` instead of a list.
 --
 -- @since 1.5.0
 runBatchR ::
