@@ -15,6 +15,7 @@ module Control.Scheduler.Types
   , WorkerStates(..)
   , SchedulerWS(..)
   , GlobalScheduler(..)
+  , Batch(..)
   , BatchId(..)
   , Jobs(..)
   , Early(..)
@@ -112,7 +113,11 @@ data Scheduler m a = Scheduler
   , _waitForCurrentBatch :: m (Results a)
   , _earlyResults        :: m (Maybe (Results a))
   , _currentBatchId      :: m BatchId
+  -- ^ Returns an opaque identifier for current batch of jobs, which can be used to either
+  -- cancel the batch early or simply check if the batch has finished or not.
   , _cancelBatch         :: BatchId -> Early a -> m Bool
+  -- ^ Stops current batch and cancells all the outstanding jobs and the ones that are
+  -- currently in progress.
   , _batchEarly          :: m (Maybe (Early a))
   }
 
@@ -138,12 +143,21 @@ data WorkerStates s = WorkerStates
   , _workerStatesMutex :: !(IORef Bool)
   }
 
+-- | This identifier is needed for tracking batches.
+newtype BatchId = BatchId { getBatchId :: Int }
+  deriving (Show, Eq, Ord)
+
+
 -- | Batch is an artifical checkpoint that can be controlled by the user throughout the
 -- lifetime of a scheduler.
 --
 -- @since 1.5.0
-newtype BatchId = BatchId { getBatchId :: Int }
-  deriving (Show, Eq, Ord)
+data Batch m a = Batch
+  { batchCancel :: a -> m Bool
+  , batchCancelWith :: a -> m Bool
+  , batchHasFinished :: m Bool
+  }
+
 
 -- | A thread safe wrapper around `Scheduler`, which allows it to be reused indefinitely
 -- and globally if need be. There is one already created in this library:

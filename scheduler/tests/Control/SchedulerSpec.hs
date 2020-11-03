@@ -128,8 +128,7 @@ prop_ManyJobsInChunks = noShrinking $ \ comp (jss :: [[Int]]) ->
   concurrentExpectation $ do
     xs <- withScheduler comp $ \s ->
       forM_ jss $ \js -> do
-        mapM_ (scheduleWork s . pure) js
-        rs <- waitForCurrentBatch s
+        rs <- runBatch s $ \ _ -> mapM_ (scheduleWork s . pure) js
         rs `shouldBe` js
     xs `shouldBe` []
 
@@ -429,20 +428,20 @@ prop_FindCancelResume comp x' (xs1', xs2') ys =
         xs = concat [xs1, [x'], xs2]
     res <-
       withSchedulerR comp $ \s -> do
-        batchId <- getCurrentBatchId s
+        r <- runBatchR s $ \batch -> do
+          forM_ xs $ \x ->
+            scheduleWork s $ do
+              if x == x'
+                then Just x <$ cancelBatchWith batch (Just (f x))
+                else pure Nothing
+        r `shouldBe` FinishedEarlyWith (Just (f x'))
+        r' <- runBatchR s $ \_batch -> forM_ ys (scheduleWork s . pure . Just)
+        r' `shouldBe` Finished (map Just ys)
+        batch <- getCurrentBatch s
         forM_ xs $ \x ->
           scheduleWork s $ do
             if x == x'
-              then Just x <$ cancelBatchWith s batchId (Just (f x))
-              else pure Nothing
-        waitForCurrentBatchR s `shouldReturn` FinishedEarlyWith (Just (f x'))
-        forM_ ys (scheduleWork s . pure . Just)
-        waitForCurrentBatchR s `shouldReturn` Finished (map Just ys)
-        batchId2 <- getCurrentBatchId s
-        forM_ xs $ \x ->
-          scheduleWork s $ do
-            if x == x'
-              then Just x <$ cancelBatch s batchId2 (Just (g x))
+              then Just x <$ cancelBatch batch (Just (g x))
               else pure $ Just (f x)
     case res of
       FinishedEarly rs r -> do

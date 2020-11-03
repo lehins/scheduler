@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE RankNTypes #-}
 -- |
 -- Module      : Control.Scheduler
 -- Copyright   : (c) Alexey Kuleshevich 2018-2020
@@ -35,15 +36,15 @@ module Control.Scheduler
   , scheduleWorkState_
   , replicateWork
   -- * Batches
-  , BatchId
-  , waitForCurrentBatch
-  , waitForCurrentBatch_
-  , waitForCurrentBatchR
-  , getCurrentBatchId
+  , Batch
+  , runBatch
+  , runBatch_
+  , runBatchR
   , cancelBatch
   , cancelBatch_
   , cancelBatchWith
   , hasBatchFinished
+  , getCurrentBatch
   -- * Early termination
   , terminate
   , terminate_
@@ -370,36 +371,14 @@ withScheduler_ comp = void . withSchedulerInternal comp scheduleJobs_ (const (pu
 {-# INLINE withScheduler_ #-}
 
 
--- | Wait for all scheduled jobs to be done and collect the computed results into a
--- list. It is a blocking operation, but if there are no jobs in progress it will return
--- immediately. It is safe to continue using the supplied scheduler after this function
--- returns. If any of the jobs resulted in an exception it will be rethrown by this
--- function, which, unless caught, will also put the scheduler in a terminated state. This
--- function also resets current `BatchId`
+
+-- | Check if the supplied batch has already finished.
 --
 -- @since 1.5.0
-waitForCurrentBatch :: Functor m => Scheduler m a -> m [a]
-waitForCurrentBatch Scheduler {_waitForCurrentBatch} = reverse . resultsToList <$> _waitForCurrentBatch
+hasBatchFinished :: Functor m => Batch m a -> m Bool
+hasBatchFinished = batchHasFinished
+{-# INLINE hasBatchFinished #-}
 
--- | Same as `waitForCurrentBatch` but discard the results
---
--- @since 1.5.0
-waitForCurrentBatch_ :: Monad m => Scheduler m a -> m ()
-waitForCurrentBatch_ Scheduler {_waitForCurrentBatch} = void _waitForCurrentBatch
-
--- | Same as `waitForCurrentBatch`, but returns the actual `Results` data type.
---
--- @since 1.5.0
-waitForCurrentBatchR :: Functor m => Scheduler m a -> m (Results a)
-waitForCurrentBatchR Scheduler {_waitForCurrentBatch} = reverseResults <$> _waitForCurrentBatch
-
-
--- | Returns an opaque identifier for current batch of jobs, which can be used to either
--- cancel the batch early or simply check if the batch has finished or not.
---
--- @since 1.5.0
-getCurrentBatchId :: Scheduler m a -> m BatchId
-getCurrentBatchId = _currentBatchId
 
 -- | Cancel batch with supplied identifier, which will lead to `waitForCurrentBatchR` to
 -- return `FinishedEarly` result. This is an idempotent operation and has no affect if currently
@@ -409,27 +388,81 @@ getCurrentBatchId = _currentBatchId
 -- concurrent cancelation and it will return `True`.
 --
 -- @since 1.5.0
-cancelBatch :: Scheduler m a -> BatchId -> a -> m Bool
-cancelBatch scheduler batchId a = _cancelBatch scheduler batchId (Early a)
+cancelBatch :: Batch m a -> a -> m Bool
+cancelBatch = batchCancel
+{-# INLINE cancelBatch #-}
 
 -- | Same as `cancelBatch`, but only works with schedulers that don't care about results
 --
 -- @since 1.5.0
-cancelBatch_ :: Scheduler m () -> BatchId -> m Bool
-cancelBatch_ scheduler batchId = _cancelBatch scheduler batchId (Early ())
+cancelBatch_ :: Batch m () -> m Bool
+cancelBatch_ b = batchCancel b ()
+{-# INLINE cancelBatch_ #-}
 
 -- | Same as `cancelBatch_`, but the result of computation will be set to `FinishedEarlyWith`
 --
 -- @since 1.5.0
-cancelBatchWith :: Scheduler m a -> BatchId -> a -> m Bool
-cancelBatchWith scheduler batchId a = _cancelBatch scheduler batchId (EarlyWith a)
+cancelBatchWith :: Batch m a -> a -> m Bool
+cancelBatchWith = batchCancelWith
+{-# INLINE cancelBatchWith #-}
 
--- | Check if the batch with suppplied identifier has already finished.
+
+-- | This function gives a way to get access to the main batch that started implicitely.
 --
 -- @since 1.5.0
-hasBatchFinished :: Functor m => Scheduler m a -> BatchId -> m Bool
-hasBatchFinished scheduler batchId = (batchId /=) <$> _currentBatchId scheduler
-{-# INLINE hasBatchFinished #-}
+getCurrentBatch ::
+     Monad m => Scheduler m a -> m (Batch m a)
+getCurrentBatch scheduler = do
+  batchId <- _currentBatchId scheduler
+  pure $ Batch
+    { batchCancel = _cancelBatch scheduler batchId . Early
+    , batchCancelWith = _cancelBatch scheduler batchId . EarlyWith
+    , batchHasFinished = (batchId /=) <$> _currentBatchId scheduler
+    }
+{-# INLINE getCurrentBatch #-}
+
+
+-- | Run a single batch of jobs. Supplied action will not return until all jobs placed on
+-- the queue are done or the whole batch is cancelled with one of these `cancelBatch`,
+-- `cancelBatch_` or `cancelBatchWith`.
+--
+-- It waits for all scheduled jobs to finish and collects the computed results into a
+-- list. It is a blocking operation, but if there are no jobs in progress it will return
+-- immediately. It is safe to continue using the supplied scheduler after this function
+-- returns. However, if any of the jobs resulted in an exception it will be rethrown by this
+-- function, which, unless caught, will further put the scheduler in a terminated state.
+--
+-- It is important to note that any job that hasn't had its results collected from the
+-- scheduler prior to starting the batch it will end up on the batch result list.
+--
+-- @since 1.5.0
+runBatch ::
+     Monad m => Scheduler m a -> (Batch m a -> m c) -> m [a]
+runBatch scheduler f = do
+  _ <- f =<< getCurrentBatch scheduler
+  reverse . resultsToList <$> _waitForCurrentBatch scheduler
+{-# INLINE runBatch #-}
+
+-- | Same as `runBatch`, except it ignores results of computation
+--
+-- @since 1.5.0
+runBatch_ ::
+     Monad m => Scheduler m () -> (Batch m () -> m c) -> m ()
+runBatch_ scheduler f = do
+  _ <- f =<< getCurrentBatch scheduler
+  void (_waitForCurrentBatch scheduler)
+{-# INLINE runBatch_ #-}
+
+
+-- | Same as `runBatch`, except it produces `Result` instead of a list.
+--
+-- @since 1.5.0
+runBatchR ::
+     Monad m => Scheduler m a -> (Batch m a -> m c) -> m (Results a)
+runBatchR scheduler f = do
+  _ <- f =<< getCurrentBatch scheduler
+  reverseResults <$> _waitForCurrentBatch scheduler
+{-# INLINE runBatchR #-}
 
 {- $setup
 
