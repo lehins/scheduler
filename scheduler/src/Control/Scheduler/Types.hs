@@ -161,7 +161,7 @@ data Batch m a = Batch
 
 -- | A thread safe wrapper around `Scheduler`, which allows it to be reused indefinitely
 -- and globally if need be. There is one already created in this library:
--- `Control.Scheduler.Global.globalSchdeuler`
+-- `Control.Scheduler.Global.globalScheduler`
 --
 -- @since 1.5.0
 data GlobalScheduler m =
