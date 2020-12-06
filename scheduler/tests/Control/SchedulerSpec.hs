@@ -7,13 +7,13 @@ module Control.SchedulerSpec
   ) where
 
 import Data.Int
-import Control.Concurrent (killThread, myThreadId, threadDelay, yield)
-import Control.Concurrent.MVar
+import Control.Prim.Monad
+import Control.Prim.Concurrent (killThread, myThreadId, threadDelay, yield)
+import Control.Prim.Concurrent.MVar
 import Control.DeepSeq
 import qualified Control.Exception as EUnsafe
 import Control.Exception.Base (ArithException(DivideByZero),
                                AsyncException(ThreadKilled))
-import Control.Monad
 import Control.Scheduler as S
 import Data.Bits (complement)
 import qualified Data.Foldable as F (toList, traverse_)
@@ -121,7 +121,7 @@ prop_ReplicateM i = concurrentProperty . replicateSeq replicateM i
 
 prop_ReplicateWorkSeq :: Int -> Fun Int Int -> Property
 prop_ReplicateWorkSeq i =
-  concurrentProperty . replicateSeq (\ n g -> withScheduler Seq (\s -> replicateWork n s g)) i
+  concurrentProperty . replicateSeq (\ n g -> withScheduler Seq (\s -> replicateWork s n g)) i
 
 
 prop_ManyJobsInChunks :: Property
@@ -314,8 +314,8 @@ prop_SameAsTrivialScheduler comp zs f =
 
 prop_Terminate ::
      (Show a, Eq a)
-  => ((Scheduler IO Int -> IO ()) -> IO a)
-  -> (Scheduler IO Int -> Int -> IO Int)
+  => ((Scheduler Int RW -> IO ()) -> IO a)
+  -> (Scheduler Int RW -> Int -> IO Int)
   -> ([Int] -> Int -> a)
   -> [Int]
   -> Int

@@ -50,7 +50,7 @@ import Data.Prim.Ref
 -- | Initialize a separate state for each worker.
 --
 -- @since 1.4.0
-initWorkerStates :: MonadIO m => Comp -> (WorkerId -> m ws) -> m (WorkerStates ws)
+initWorkerStates :: MonadPrim s m => Comp -> (WorkerId -> m ws) -> m (WorkerStates ws s)
 initWorkerStates comp initState = do
   let nWorkers = compNumWorkers comp
   arr <- newRawSBMArray $ Size nWorkers
@@ -68,9 +68,9 @@ initWorkerStates comp initState = do
 
 withSchedulerWSInternal ::
      MonadUnliftIO m
-  => (Comp -> (Scheduler m a -> t) -> m b)
-  -> WorkerStates s
-  -> (SchedulerWS s m a -> t)
+  => (Comp -> (Scheduler a RW -> t) -> m b)
+  -> WorkerStates ws RW
+  -> (SchedulerWS ws a RW -> t)
   -> m b
 withSchedulerWSInternal withScheduler' states action = bracket lockState unlockState runSchedulerWS
   where
@@ -90,7 +90,7 @@ withSchedulerWSInternal withScheduler' states action = bracket lockState unlockS
 -- requests are bluntly ignored.
 --
 -- @since 1.1.0
-trivialScheduler_ :: Applicative f => Scheduler f ()
+trivialScheduler_ :: Scheduler () s
 trivialScheduler_ =
   Scheduler
     { _numWorkers = 1
@@ -110,7 +110,7 @@ trivialScheduler_ =
 -- rather computed immediately.
 --
 -- @since 1.4.2
-withTrivialSchedulerR :: MonadPrim s m => (Scheduler m a -> m b) -> m (Results a)
+withTrivialSchedulerR :: MonadPrim s m => (Scheduler a s -> m b) -> m (Results a)
 withTrivialSchedulerR action = do
   resRef <- newRef []
   batchRef <- newPVar $ BatchId 0
@@ -153,8 +153,8 @@ withTrivialSchedulerR action = do
   readRef finResRef >>= \case
     Just rs -> pure $ reverseResults rs
     Nothing -> do
-      mEarly <- takeBatchEarly
-      reverseResults <$> collectResults mEarly takeResults
+      mEarly <- liftST $ takeBatchEarly
+      reverseResults <$> liftST (collectResults mEarly takeResults)
 
 
 
@@ -162,8 +162,8 @@ withTrivialSchedulerR action = do
 -- returns results in an original LIFO order.
 --
 -- @since 1.4.2
-withTrivialSchedulerRIO :: MonadUnliftIO m => (Scheduler m a -> m b) -> m (Results a)
-withTrivialSchedulerRIO action = do
+withTrivialSchedulerRIO :: MonadUnliftIO m => (Scheduler a RW -> m b) -> m (Results a)
+withTrivialSchedulerRIO action = withRunInST $ \ run -> do
   resRef <- newRef []
   batchRef <- newPVar $ BatchId 0
   finResRef <- newRef Nothing
@@ -202,7 +202,7 @@ withTrivialSchedulerRIO action = do
                 when b $ atomicWriteRef batchEarlyRef (Just early)
                 pure b
           }
-  _ :: Either TerminateEarlyException b <- try $ action scheduler
+  _ :: Either TerminateEarlyException b <- try $ run $ action scheduler
   readRef finResRef >>= \case
     Just rs -> pure rs
     Nothing -> do
@@ -218,21 +218,20 @@ traverse_ :: (Applicative f, Foldable t) => (a -> f ()) -> t a -> f ()
 traverse_ f = F.foldl' (\c a -> c *> f a) (pure ())
 {-# INLINE traverse_ #-}
 
-scheduleJobs :: MonadIO m => Jobs m a -> (WorkerId -> m a) -> m ()
+scheduleJobs :: Jobs a s -> (WorkerId -> ST s a) -> ST s ()
 scheduleJobs = scheduleJobsWith mkJob
 {-# INLINEABLE scheduleJobs #-}
 
 -- | Ignores the result of computation, thus avoiding some overhead.
-scheduleJobs_ :: MonadIO m => Jobs m a -> (WorkerId -> m b) -> m ()
+scheduleJobs_ :: Jobs a s -> (WorkerId -> ST s b) -> ST s ()
 scheduleJobs_ = scheduleJobsWith (\job -> pure (Job_ (void . job (\_ -> pure ()))))
 {-# INLINEABLE scheduleJobs_ #-}
 
 scheduleJobsWith ::
-     MonadIO m
-  => (((b -> m ()) -> WorkerId -> m ()) -> m (Job m a))
-  -> Jobs m a
-  -> (WorkerId -> m b)
-  -> m ()
+     (((b -> ST s ()) -> WorkerId -> ST s ()) -> ST s (Job a s))
+  -> Jobs a s
+  -> (WorkerId -> ST s b)
+  -> ST s ()
 scheduleJobsWith mkJob' Jobs {..} action = do
   job <-
     mkJob' $ \storeResult wid -> do
@@ -246,11 +245,10 @@ scheduleJobsWith mkJob' Jobs {..} action = do
 -- | Runs the worker until it is terminated with a `WorkerTerminateException` or is killed
 -- by some other asynchronous exception, which will propagate to the user calling thread.
 runWorker ::
-     MonadUnliftIO m
-  => (forall c. m c -> m c)
+     (forall c. ST RW c -> ST RW c)
   -> WorkerId
-  -> Jobs m a
-  -> m ()
+  -> Jobs a RW
+  -> ST RW ()
 runWorker unmask wId Jobs {jobsQueue, jobsQueueCount, jobsSchedulerStatus} = go
   where
     onBlockedMVar eUnblocked =
@@ -284,11 +282,10 @@ runWorker unmask wId Jobs {jobsQueue, jobsQueueCount, jobsSchedulerStatus} = go
 
 
 initScheduler ::
-     MonadIO m
-  => Comp
-  -> (Jobs m a -> (WorkerId -> m a) -> m ())
-  -> (JQueue m a -> m [a])
-  -> m (Jobs m a, [ThreadId] -> Scheduler m a)
+     Comp
+  -> (Jobs a s -> (WorkerId -> ST s a) -> ST s ())
+  -> (JQueue a s -> ST s [a])
+  -> ST s (Jobs a s, [ThreadId] -> Scheduler a s)
 initScheduler comp submitWork collect = do
   let jobsNumWorkers = compNumWorkers comp
   jobsQueue <- newJQueue
@@ -361,42 +358,40 @@ initScheduler comp submitWork collect = do
 withSchedulerInternal ::
      MonadUnliftIO m
   => Comp -- ^ Computation strategy
-  -> (Jobs m a -> (WorkerId -> m a) -> m ()) -- ^ How to schedule work
-  -> (JQueue m a -> m [a]) -- ^ How to collect results
-  -> (Scheduler m a -> m b)
+  -> (Jobs a RW -> (WorkerId -> ST RW a) -> ST RW ()) -- ^ How to schedule work
+  -> (JQueue a RW -> ST RW [a]) -- ^ How to collect results
+  -> (Scheduler a RW -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m (Results a)
 withSchedulerInternal comp submitWork collect onScheduler = do
-  (jobs@Jobs {..}, mkScheduler) <- initScheduler comp submitWork collect
   -- / Wait for the initial jobs to get scheduled before spawining off the workers, otherwise it
   -- would be trickier to identify the beginning and the end of a job pool.
-  withRunInIO $ \run -> do
-    bracket (run (spawnWorkers jobs comp)) terminateWorkers $ \tids ->
+  withRunInST $ \run -> do
+    (jobs@Jobs {..}, mkScheduler) <- initScheduler comp submitWork collect
+    bracket (spawnWorkers jobs comp) terminateWorkers $ \tids ->
       let scheduler = mkScheduler tids
           readEarlyTermination =
             _earlyResults scheduler >>= \case
               Nothing -> error "Impossible: uninitialized early termination value"
               Just rs -> pure rs
        in try (run (onScheduler scheduler)) >>= \case
-            Left TerminateEarlyException -> run readEarlyTermination
+            Left TerminateEarlyException -> readEarlyTermination
             Right _ -> do
-              run $ scheduleJobs_ jobs (\_ -> atomicSubPVar_ jobsQueueCount 1)
-              run $ unblockPopJQueue jobsQueue
+              scheduleJobs_ jobs (\_ -> atomicSubPVar_ jobsQueueCount 1)
+              unblockPopJQueue jobsQueue
               status <- takeMVar jobsSchedulerStatus
                 -- \ wait for all worker to finish. If any one of the workers had a problem, then
                 -- this MVar will contain an exception
               case status of
                 SchedulerWorkerException (WorkerException exc)
-                  | Just TerminateEarlyException <- fromException exc -> run readEarlyTermination
-                  | Just CancelBatchException <- fromException exc ->
-                    run $ do
+                  | Just TerminateEarlyException <- fromException exc -> readEarlyTermination
+                  | Just CancelBatchException <- fromException exc -> do
                       mEarly <- _batchEarly scheduler
                       collectResults mEarly (collect jobsQueue)
                   | otherwise -> throw exc
                   -- \ Here we need to unwrap the legit worker exception and rethrow it, so
                   -- the main thread will think like it's his own
-                SchedulerIdle ->
-                  run $ do
+                SchedulerIdle -> do
                     mEarly <- _batchEarly scheduler
                     collectResults mEarly (collect jobsQueue)
                   -- \ Now we are sure all workers have done their job we can safely read
@@ -413,7 +408,7 @@ collectResults mEarly collect =
 {-# INLINEABLE collectResults #-}
 
 
-spawnWorkers :: forall m a. MonadUnliftIO m => Jobs m a -> Comp -> m [ThreadId]
+spawnWorkers :: forall a. Jobs a RW -> Comp -> ST RW [ThreadId]
 spawnWorkers jobs@Jobs {jobsNumWorkers} =
   \case
     Par      -> spawnWorkersWith forkOn [1 .. jobsNumWorkers]

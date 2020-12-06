@@ -28,13 +28,12 @@ import Data.Prim.Ref
 
 -- | Global scheduler with `Par` computation strategy that can be used anytime using
 -- `withGlobalScheduler_`
-globalScheduler :: GlobalScheduler IO
+globalScheduler :: GlobalScheduler RW
 globalScheduler = unsafePerformIO (newGlobalScheduler Par)
 {-# NOINLINE globalScheduler #-}
 
 
-initGlobalScheduler ::
-     MonadUnliftIO m => Comp -> (Scheduler m a -> [ThreadId] -> m b) -> m b
+initGlobalScheduler :: Comp -> (Scheduler a RW -> [ThreadId] -> ST RW b) -> ST RW b
 initGlobalScheduler comp action = do
   (jobs, mkScheduler) <- initScheduler comp scheduleJobs_ (const (pure []))
   bracketOnError (spawnWorkers jobs comp) terminateWorkers $ \tids ->
@@ -46,9 +45,9 @@ initGlobalScheduler comp action = do
 -- degrate performance, therefore it is best not to use more than one scheduler at a time.
 --
 -- @since 1.5.0
-newGlobalScheduler :: MonadUnliftIO m => Comp -> m (GlobalScheduler m)
+newGlobalScheduler :: MonadIO m => Comp -> m (GlobalScheduler RW)
 newGlobalScheduler comp =
-  initGlobalScheduler comp $ \scheduler tids -> do
+  liftST $ initGlobalScheduler comp $ \scheduler tids -> do
     mvar <- newMVar scheduler
     tidsRef <- newRef tids
     _ <- mkWeakMVar mvar (readRef tidsRef >>= terminateWorkers)
@@ -64,26 +63,24 @@ newGlobalScheduler comp =
 -- used concurrently other schedulers might get created.
 --
 -- @since 1.5.0
-withGlobalScheduler_ :: MonadUnliftIO m => GlobalScheduler m -> (Scheduler m () -> m a) -> m ()
+withGlobalScheduler_ :: MonadUnliftIO m => GlobalScheduler RW -> (Scheduler () RW -> m a) -> m ()
 withGlobalScheduler_ GlobalScheduler {..} action =
-  withRunInIO $ \run -> do
+  withRunInST $ \run -> do
     let initializeNewScheduler = do
-          initGlobalScheduler globalSchedulerComp $ \scheduler tids ->
-            liftIO $ do
-              oldTids <- atomicModifyRef globalSchedulerThreadIdsRef $ (,) tids
-              terminateWorkers oldTids
-              putMVar globalSchedulerMVar scheduler
+          initGlobalScheduler globalSchedulerComp $ \scheduler tids -> do
+            oldTids <- atomicModifyRef globalSchedulerThreadIdsRef $ (,) tids
+            terminateWorkers oldTids
+            putMVar globalSchedulerMVar scheduler
     mask $ \restore ->
       tryTakeMVar globalSchedulerMVar >>= \case
         Nothing -> restore $ run $ withScheduler_ globalSchedulerComp action
         Just scheduler -> do
-          let runScheduler =
-                run $ do
-                  _ <- action scheduler
+          let runScheduler = do
+                  _ <- run $ action scheduler
                   mEarly <- _earlyResults scheduler
                   mEarly <$ when (isNothing mEarly) (void (_waitForCurrentBatch scheduler))
-          mEarly <- restore runScheduler `onException` run initializeNewScheduler
+          mEarly <- restore runScheduler `onException` initializeNewScheduler
           -- Whenever a scheduler is terminated it is no longer usable, need to re-initialize
           case mEarly of
             Nothing -> putMVar globalSchedulerMVar scheduler
-            Just _  -> run initializeNewScheduler
+            Just _  -> initializeNewScheduler

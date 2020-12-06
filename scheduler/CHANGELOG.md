@@ -1,3 +1,10 @@
+# 2.0.0
+
+* Switch to `primal`.
+* Remove monad type argument `m` from all of the types and add the actual state token `s`.
+* `replicateWork` swap arguments order to be more consistent with all other functions that
+  accept schduler as the first argument
+
 # 1.5.0
 
 Despite that the major part of the version was bumped up, this release does not include

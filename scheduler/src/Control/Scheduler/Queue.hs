@@ -33,11 +33,11 @@ import Data.Prim.Ref
 
 -- | A blocking unbounded queue that keeps the jobs in FIFO order and the results Refs
 -- in reversed
-data Queue m a = Queue
-  { qQueue   :: ![Job m a]
-  , qStack   :: ![Job m a]
-  , qResults :: ![Ref (Maybe a) RW]
-  , qBaton   :: {-# UNPACK #-}!(MVar () RW)
+data Queue a s = Queue
+  { qQueue   :: ![Job a s]
+  , qStack   :: ![Job a s]
+  , qResults :: ![Ref (Maybe a) s]
+  , qBaton   :: {-# UNPACK #-}!(MVar () s)
   }
 
 
@@ -51,7 +51,7 @@ newtype WorkerId = WorkerId
   } deriving (Show, Read, Eq, Ord, Enum, Bounded, Num, Real, Integral)
 
 
-popQueue :: Queue m a -> Maybe (Job m a, Queue m a)
+popQueue :: Queue a s -> Maybe (Job a s, Queue a s)
 popQueue queue =
   case qQueue queue of
     x:xs -> Just (x, queue {qQueue = xs})
@@ -61,53 +61,51 @@ popQueue queue =
         y:ys -> Just (y, queue {qQueue = ys, qStack = []})
 {-# INLINEABLE popQueue #-}
 
-data Job m a
-  = Job {-# UNPACK #-} !(Ref (Maybe a) RW) (WorkerId -> m ())
-  | Job_ (WorkerId -> m ())
+data Job a s
+  = Job {-# UNPACK #-} !(Ref (Maybe a) s) (WorkerId -> ST s ())
+  | Job_ (WorkerId -> ST s ())
 
 
-mkJob :: MonadIO m => ((a -> m ()) -> WorkerId -> m ()) -> m (Job m a)
+mkJob :: ((a -> ST s ()) -> WorkerId -> ST s ()) -> ST s (Job a s)
 mkJob action = do
-  resRef <- liftIO $ newRef Nothing
-  return $ Job resRef (action (liftIO . writeRef resRef . Just))
+  resRef <- newRef Nothing
+  return $ Job resRef (action (writeRef resRef . Just))
 {-# INLINEABLE mkJob #-}
 
-data JQueue m a =
+data JQueue a s =
   JQueue
-    { jqQueueRef :: {-# UNPACK #-}!(Ref (Queue m a) RW)
-    , jqLock     :: {-# UNPACK #-}!(MVar () RW)
+    { jqQueueRef :: {-# UNPACK #-}!(Ref (Queue a s) s)
+    , jqLock     :: {-# UNPACK #-}!(MVar () s)
     }
 
-newJQueue :: MonadIO m => m (JQueue m a)
-newJQueue =
-  liftIO $ do
-    newLock <- newEmptyMVar
-    newBaton <- newEmptyMVar
-    queueRef <- newRef (Queue [] [] [] newBaton)
-    return $ JQueue queueRef newLock
+newJQueue :: ST s (JQueue a s)
+newJQueue = do
+  newLock <- newEmptyMVar
+  newBaton <- newEmptyMVar
+  queueRef <- newRef (Queue [] [] [] newBaton)
+  return $ JQueue queueRef newLock
 
 -- | Pushes an item onto a queue and returns the previous count.
-pushJQueue :: MonadIO m => JQueue m a -> Job m a -> m ()
-pushJQueue (JQueue jQueueRef _) job =
-  liftIO $ do
-    newBaton <- newEmptyMVar
-    join $
-      atomicModifyRef jQueueRef $ \queue@Queue {qStack, qResults, qBaton} ->
-        ( queue
-            { qResults =
-                case job of
-                  Job resRef _ -> resRef : qResults
-                  _            -> qResults
-            , qStack = job : qStack
-            , qBaton = newBaton
-            }
-        , putMVar qBaton ())
+pushJQueue :: JQueue a s -> Job a s -> ST s ()
+pushJQueue (JQueue jQueueRef _) job = do
+  newBaton <- newEmptyMVar
+  join $
+    atomicModifyRef jQueueRef $ \queue@Queue {qStack, qResults, qBaton} ->
+      ( queue
+          { qResults =
+              case job of
+                Job resRef _ -> resRef : qResults
+                _            -> qResults
+          , qStack = job : qStack
+          , qBaton = newBaton
+          }
+      , putMVar qBaton ())
 {-# INLINEABLE pushJQueue #-}
 
 -- | Pops an item from the queue. The job returns the total job counts that is still left
 -- in the queue
-popJQueue :: MonadUnliftIO m => JQueue m a -> m (WorkerId -> m ())
-popJQueue (JQueue jQueueRef lock) = liftIO inner
+popJQueue :: JQueue a s -> ST s (WorkerId -> ST s ())
+popJQueue (JQueue jQueueRef lock) = inner
   where
     inner = do
       readMVar lock
@@ -122,29 +120,28 @@ popJQueue (JQueue jQueueRef lock) = liftIO inner
                   Job_ action_ -> return action_)
 {-# INLINEABLE popJQueue #-}
 
-unblockPopJQueue :: MonadIO m => JQueue m a -> m ()
-unblockPopJQueue (JQueue _ lock) = liftIO $ putMVar lock ()
+unblockPopJQueue :: JQueue a s -> ST s ()
+unblockPopJQueue (JQueue _ lock) = putMVar lock ()
 {-# INLINEABLE unblockPopJQueue #-}
 
-blockPopJQueue :: MonadIO m => JQueue m a -> m ()
-blockPopJQueue (JQueue _ lock) = liftIO $ takeMVar lock
+blockPopJQueue :: JQueue a s -> ST s ()
+blockPopJQueue (JQueue _ lock) = takeMVar lock
 {-# INLINEABLE blockPopJQueue #-}
 
 -- | Clears any jobs that haven't been started yet. Returns the number of jobs that are
 -- still in progress and have not been yet been completed.
-clearPendingJQueue :: MonadIO m => JQueue m a -> m ()
+clearPendingJQueue :: JQueue a s -> ST s ()
 clearPendingJQueue (JQueue queueRef _) =
-  liftIO $ atomicModifyRef_ queueRef $ \queue -> (queue {qQueue = [], qStack = []})
+  atomicModifyRef_ queueRef $ \queue -> (queue {qQueue = [], qStack = []})
 {-# INLINEABLE clearPendingJQueue #-}
 
 
 -- | Extracts all results available up to now, the uncomputed ones are discarded. This
 -- also has an affect of resetting the total job count to zero.
-readResults :: MonadIO m => JQueue m a -> m [a]
-readResults (JQueue jQueueRef _) =
-  liftIO $ do
-    results <-
-      atomicModifyRef jQueueRef $ \queue ->
-        (queue {qQueue = [], qStack = [], qResults = []}, qResults queue)
-    catMaybes <$> mapM readRef results
+readResults :: JQueue a s -> ST s [a]
+readResults (JQueue jQueueRef _) = do
+  results <-
+    atomicModifyRef jQueueRef $ \queue ->
+      (queue {qQueue = [], qStack = [], qResults = []}, qResults queue)
+  catMaybes <$> mapM readRef results
 {-# INLINEABLE readResults #-}

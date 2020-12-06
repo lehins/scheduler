@@ -3,7 +3,6 @@
 module Main where
 
 import qualified Control.Concurrent.Async as A (mapConcurrently, replicateConcurrently)
-import Control.Monad (replicateM_, replicateM)
 import Control.Monad.Par (IVar, Par, get, newFull_, runParIO)
 import Control.Parallel (par)
 import Control.Scheduler
@@ -11,7 +10,6 @@ import Control.Scheduler.Global
 import Control.Concurrent (getNumCapabilities)
 import Control.Concurrent.Async.Pool as AsyncPool
 import Criterion.Main
-import Control.DeepSeq
 import Data.Foldable as F
 import Data.IORef
 import Streamly (asyncly)
@@ -32,20 +30,22 @@ main = do
               "noop"
               [ bench "Seq" $ whnfIO (withScheduler_ Seq (\_ -> pure ()))
               , bench "Par" $ whnfIO (withScheduler_ Par (\_ -> pure ()))
-              , bench "Par (gloabal)" $
+              , bench "Par (global)" $
                 whnfIO (withGlobalScheduler_ globalScheduler (\_ -> pure ()))
               , bench "Par'" $ whnfIO (withScheduler_ Par' (\_ -> pure ()))
               ]
-          , let schedule s = replicateM_ k $ scheduleWork_ s (pure ())
+          , let schedule :: Scheduler () RW -> IO ()
+                schedule s = replicateM_ k $ scheduleWork_ s (pure ())
              in bgroup
                   ("pure () - " ++ show k)
                   [ bench "trivial" $ whnfIO (schedule trivialScheduler_)
                   , bench "Seq" $ whnfIO (withScheduler_ Seq schedule)
                   , bench "Par" $ whnfIO (withScheduler_ Par schedule)
-                  , bench "Par (gloabal)" $ whnfIO (withGlobalScheduler_ globalScheduler schedule)
+                  , bench "Par (global)" $ whnfIO (withGlobalScheduler_ globalScheduler schedule)
                   , bench "Par'" $ whnfIO (withScheduler_ Par' schedule)
                   ]
-          , let schedule s = replicateM_ k $ scheduleWork s (pure ())
+          , let schedule :: Scheduler () RW -> IO ()
+                schedule s = replicateM_ k $ scheduleWork s (pure ())
              in bgroup
                   ("pure [()] - " ++ show k)
                   [ bench "trivial" $ whnfIO (withTrivialScheduler schedule)
