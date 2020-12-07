@@ -36,7 +36,8 @@ main = do
                 whnfIO (withGlobalScheduler_ globalScheduler (\_ -> pure ()))
               , bench "Par'" $ whnfIO (withScheduler_ Par' (\_ -> pure ()))
               ]
-          , let schedule s = replicateM_ k $ scheduleWork_ s (pure ())
+          , let schedule :: Scheduler IO () -> IO ()
+                schedule s = replicateM_ k $ scheduleWork_ s (pure ())
              in bgroup
                   ("pure () - " ++ show k)
                   [ bench "trivial" $ whnfIO (schedule trivialScheduler_)
@@ -45,7 +46,8 @@ main = do
                   , bench "Par (gloabal)" $ whnfIO (withGlobalScheduler_ globalScheduler schedule)
                   , bench "Par'" $ whnfIO (withScheduler_ Par' schedule)
                   ]
-          , let schedule s = replicateM_ k $ scheduleWork s (pure ())
+          , let schedule :: Scheduler IO () -> IO ()
+                schedule s = replicateM_ k $ scheduleWork s (pure ())
              in bgroup
                   ("pure [()] - " ++ show k)
                   [ bench "trivial" $ whnfIO (withTrivialScheduler schedule)
