@@ -33,24 +33,23 @@ module Control.Scheduler.Internal
   , traverse_
   ) where
 
-import Control.Prim.Concurrent
-import Control.Prim.Concurrent.MVar
-import Control.Prim.Exception
+import Primal.Concurrent
+import Primal.Concurrent.MVar
+import Primal.Exception
 import Control.Scheduler.Computation
 import Control.Scheduler.Queue
 import Control.Scheduler.Types
 import Data.Coerce
 import qualified Data.Foldable as F (foldl')
-import Data.Prim.Array
-import Data.Prim.PVar
-import Data.Prim.Ref
+import Primal.Array
+import Primal.Ref
 
 
 
 -- | Initialize a separate state for each worker.
 --
 -- @since 1.4.0
-initWorkerStates :: MonadPrim s m => Comp -> (WorkerId -> m ws) -> m (WorkerStates ws s)
+initWorkerStates :: Primal s m => Comp -> (WorkerId -> m ws) -> m (WorkerStates ws s)
 initWorkerStates comp initState = do
   let nWorkers = compNumWorkers comp
   arr <- newRawSBMArray $ Size nWorkers
@@ -61,7 +60,7 @@ initWorkerStates comp initState = do
           go (i + 1)
   go 0
   workerStates <- freezeSBMArray arr
-  mutex <- newRef False
+  mutex <- newURef False
   pure
     WorkerStates
       {_workerStatesComp = comp, _workerStatesArray = workerStates, _workerStatesMutex = mutex}
@@ -75,10 +74,10 @@ withSchedulerWSInternal ::
 withSchedulerWSInternal withScheduler' states action = bracket lockState unlockState runSchedulerWS
   where
     mutex = _workerStatesMutex states
-    lockState = atomicSwapRef mutex True
+    lockState = atomicSwapURef mutex True
     unlockState wasLocked
       | wasLocked = pure ()
-      | otherwise = atomicWriteRef mutex False
+      | otherwise = atomicWriteURef mutex False
     runSchedulerWS isLocked
       | isLocked = throw MutexException
       | otherwise =
@@ -110,20 +109,20 @@ trivialScheduler_ =
 -- rather computed immediately.
 --
 -- @since 1.4.2
-withTrivialSchedulerR :: MonadPrim s m => (Scheduler a s -> m b) -> m (Results a)
+withTrivialSchedulerR :: Primal s m => (Scheduler a s -> m b) -> m (Results a)
 withTrivialSchedulerR action = do
-  resRef <- newRef []
-  batchRef <- newPVar $ BatchId 0
-  finResRef <- newRef Nothing
-  batchEarlyRef <- newRef Nothing
-  let bumpCurrentBatchId = atomicAddPVar_ batchRef (BatchId 1)
+  resRef <- newBRef []
+  batchRef <- newURef $ BatchId 0
+  finResRef <- newBRef Nothing
+  batchEarlyRef <- newBRef Nothing
+  let bumpCurrentBatchId = atomicAddURef_ batchRef (BatchId 1)
       bumpBatchId (BatchId c) =
-        atomicModifyPVar batchRef $ \b@(BatchId x) ->
+        atomicModifyURef batchRef $ \b@(BatchId x) ->
           if x == c
             then (BatchId (x + 1), True)
             else (b, False)
-      takeBatchEarly = atomicSwapRef batchEarlyRef Nothing
-      takeResults = atomicSwapRef resRef []
+      takeBatchEarly = atomicSwapBRef batchEarlyRef Nothing
+      takeResults = atomicSwapBRef resRef []
   _ <-
     action $
     Scheduler
@@ -131,26 +130,26 @@ withTrivialSchedulerR action = do
       , _scheduleWorkId =
           \f -> do
             r <- f (WorkerId 0)
-            r `seq` atomicModifyRef_ resRef (r :)
+            r `seq` atomicModifyBRef_ resRef (r :)
       , _terminate =
           \early -> do
             bumpCurrentBatchId
             finishEarly <- collectResults (Just early) takeResults
-            unEarly early <$ writeRef finResRef (Just finishEarly)
+            unEarly early <$ writeBRef finResRef (Just finishEarly)
       , _waitForCurrentBatch = do
           mEarly <- takeBatchEarly
           rs <- collectResults mEarly . pure =<< takeResults
           rs <$ bumpCurrentBatchId
-      , _earlyResults = readRef finResRef
-      , _currentBatchId = readPVar batchRef
+      , _earlyResults = readBRef finResRef
+      , _currentBatchId = readURef batchRef
       , _batchEarly = takeBatchEarly
       , _cancelBatch =
           \batchId early -> do
             b <- bumpBatchId batchId
-            when b $ writeRef batchEarlyRef (Just early)
+            when b $ writeBRef batchEarlyRef (Just early)
             pure b
       }
-  readRef finResRef >>= \case
+  readBRef finResRef >>= \case
     Just rs -> pure $ reverseResults rs
     Nothing -> do
       mEarly <- liftST $ takeBatchEarly
@@ -164,46 +163,46 @@ withTrivialSchedulerR action = do
 -- @since 1.4.2
 withTrivialSchedulerRIO :: MonadUnliftIO m => (Scheduler a RW -> m b) -> m (Results a)
 withTrivialSchedulerRIO action = withRunInST $ \ run -> do
-  resRef <- newRef []
-  batchRef <- newPVar $ BatchId 0
-  finResRef <- newRef Nothing
-  batchEarlyRef <- newRef Nothing
-  let bumpCurrentBatchId = atomicAddPVar_ batchRef (coerce (1 :: Int))
+  resRef <- newBRef []
+  batchRef <- newURef $ BatchId 0
+  finResRef <- newBRef Nothing
+  batchEarlyRef <- newBRef Nothing
+  let bumpCurrentBatchId = atomicAddURef_ batchRef (coerce (1 :: Int))
       bumpBatchId (BatchId c) =
-        atomicModifyPVar batchRef $ \b@(BatchId x) ->
+        atomicModifyURef batchRef $ \b@(BatchId x) ->
           if x == c
             then (BatchId (x + 1), True)
             else (b, False)
-      takeBatchEarly = atomicSwapRef batchEarlyRef Nothing
-      takeResults = atomicSwapRef resRef []
+      takeBatchEarly = atomicSwapBRef batchEarlyRef Nothing
+      takeResults = atomicSwapBRef resRef []
       scheduler =
         Scheduler
           { _numWorkers = 1
           , _scheduleWorkId =
               \f -> do
                 r <- f (WorkerId 0)
-                r `seq` atomicModifyRef_ resRef (r :)
+                r `seq` atomicModifyBRef_ resRef (r :)
           , _terminate =
               \ !early -> do
                 bumpCurrentBatchId
                 finishEarly <- collectResults (Just early) takeResults
-                atomicWriteRef finResRef (Just finishEarly)
+                atomicWriteBRef finResRef (Just finishEarly)
                 throw TerminateEarlyException
           , _waitForCurrentBatch = do
                 mEarly <- takeBatchEarly
                 rs <- collectResults mEarly . pure =<< takeResults
                 rs <$ bumpCurrentBatchId
-          , _earlyResults = readRef finResRef
-          , _currentBatchId = readPVar batchRef
+          , _earlyResults = readBRef finResRef
+          , _currentBatchId = readURef batchRef
           , _batchEarly = takeBatchEarly
           , _cancelBatch =
               \batchId early -> do
                 b <- bumpBatchId batchId
-                when b $ atomicWriteRef batchEarlyRef (Just early)
+                when b $ atomicWriteBRef batchEarlyRef (Just early)
                 pure b
           }
   _ :: Either TerminateEarlyException b <- try $ run $ action scheduler
-  readRef finResRef >>= \case
+  readBRef finResRef >>= \case
     Just rs -> pure rs
     Nothing -> do
         mEarly <- takeBatchEarly
@@ -237,7 +236,7 @@ scheduleJobsWith mkJob' Jobs {..} action = do
     mkJob' $ \storeResult wid -> do
       res <- action wid
       res `seq` storeResult res
-  atomicAddPVar_ jobsQueueCount 1
+  atomicAddURef_ jobsQueueCount 1
   pushJQueue jobsQueue job
 {-# INLINEABLE scheduleJobsWith #-}
 
@@ -262,7 +261,7 @@ runWorker unmask wId Jobs {jobsQueue, jobsQueueCount, jobsSchedulerStatus} = go
     go = do
       eRes <- try $ do
         job <- popJQueue jobsQueue
-        unmask (job wId >> atomicSubFetchOldPVar jobsQueueCount 1)
+        unmask (job wId >> atomicSubFetchOldURef jobsQueueCount 1)
       -- \ popJQueue can block, but it is still interruptable
       case eRes of
         Right 1 -> try (putMVar jobsSchedulerStatus SchedulerIdle) >>= onBlockedMVar
@@ -283,17 +282,17 @@ runWorker unmask wId Jobs {jobsQueue, jobsQueueCount, jobsSchedulerStatus} = go
 
 initScheduler ::
      Comp
-  -> (Jobs a s -> (WorkerId -> ST s a) -> ST s ())
-  -> (JQueue a s -> ST s [a])
-  -> ST s (Jobs a s, [ThreadId] -> Scheduler a s)
+  -> (Jobs a RW -> (WorkerId -> ST RW a) -> ST RW ())
+  -> (JQueue a RW -> ST RW [a])
+  -> ST RW (Jobs a RW, [ThreadId] -> Scheduler a RW)
 initScheduler comp submitWork collect = do
   let jobsNumWorkers = compNumWorkers comp
   jobsQueue <- newJQueue
-  jobsQueueCount <- newPVar 1
+  jobsQueueCount <- newURef 1
   jobsSchedulerStatus <- newEmptyMVar
-  earlyTerminationResultRef <- newRef Nothing
-  batchIdRef <- newPVar $ BatchId 0
-  batchEarlyRef <- newRef Nothing
+  earlyTerminationResultRef <- newBRef Nothing
+  batchIdRef <- newURef $ BatchId 0
+  batchEarlyRef <- newBRef Nothing
   let jobs =
         Jobs
           { jobsNumWorkers = jobsNumWorkers
@@ -301,9 +300,9 @@ initScheduler comp submitWork collect = do
           , jobsQueueCount = jobsQueueCount
           , jobsSchedulerStatus = jobsSchedulerStatus
           }
-      bumpCurrentBatchId = atomicAddPVar_ batchIdRef (coerce (1 :: Int))
+      bumpCurrentBatchId = atomicAddURef_ batchIdRef (coerce (1 :: Int))
       bumpBatchId (BatchId c) =
-        atomicModifyPVar batchIdRef $ \b@(BatchId x) ->
+        atomicModifyURef batchIdRef $ \b@(BatchId x) ->
           if x == c
             then (BatchId (x + 1), True)
             else (b, False)
@@ -318,13 +317,13 @@ initScheduler comp submitWork collect = do
                     Early r -> FinishedEarly <$> collect jobsQueue <*> pure r
                     EarlyWith r -> pure $ FinishedEarlyWith r
                 bumpCurrentBatchId
-                atomicWriteRef earlyTerminationResultRef $ Just finishEarly
+                atomicWriteBRef earlyTerminationResultRef $ Just finishEarly
                 throw TerminateEarlyException
           , _waitForCurrentBatch =
-              do scheduleJobs_ jobs (\_ -> atomicSubPVar_ jobsQueueCount 1)
+              do scheduleJobs_ jobs (\_ -> atomicSubURef_ jobsQueueCount 1)
                  unblockPopJQueue jobsQueue
                  status <- takeMVar jobsSchedulerStatus
-                 mEarly <- atomicSwapRef batchEarlyRef Nothing
+                 mEarly <- atomicSwapBRef batchEarlyRef Nothing
                  rs <-
                    case status of
                      SchedulerWorkerException (WorkerException exc) ->
@@ -339,16 +338,16 @@ initScheduler comp submitWork collect = do
                        bumpCurrentBatchId
                        res <- collect jobsQueue
                        res `seq` collectResults mEarly (pure res)
-                 rs <$ atomicWritePVar jobsQueueCount 1
-          , _earlyResults = readRef earlyTerminationResultRef
-          , _currentBatchId = readPVar batchIdRef
-          , _batchEarly = readRef batchEarlyRef
+                 rs <$ atomicWriteURef jobsQueueCount 1
+          , _earlyResults = readBRef earlyTerminationResultRef
+          , _currentBatchId = readURef batchIdRef
+          , _batchEarly = readBRef batchEarlyRef
           , _cancelBatch =
               \batchId early -> do
                 b <- bumpBatchId batchId
                 when b $ do
                   blockPopJQueue jobsQueue
-                  atomicWriteRef batchEarlyRef $ Just early
+                  atomicWriteBRef batchEarlyRef $ Just early
                   throw CancelBatchException
                 pure b
           }
@@ -377,7 +376,7 @@ withSchedulerInternal comp submitWork collect onScheduler = do
        in try (run (onScheduler scheduler)) >>= \case
             Left TerminateEarlyException -> readEarlyTermination
             Right _ -> do
-              scheduleJobs_ jobs (\_ -> atomicSubPVar_ jobsQueueCount 1)
+              scheduleJobs_ jobs (\_ -> atomicSubURef_ jobsQueueCount 1)
               unblockPopJQueue jobsQueue
               status <- takeMVar jobsSchedulerStatus
                 -- \ wait for all worker to finish. If any one of the workers had a problem, then
@@ -423,7 +422,7 @@ spawnWorkers jobs@Jobs {jobsNumWorkers} =
           forker on $ runWorker restore wId jobs
 {-# INLINEABLE spawnWorkers #-}
 
-terminateWorkers :: MonadPrim RW m => [ThreadId] -> m ()
+terminateWorkers :: Primal RW m => [ThreadId] -> m ()
 terminateWorkers = traverse_ (`throwTo` WorkerTerminateException)
 
 -- | Conversion to a list. Elements are expected to be in the orignal LIFO order, so

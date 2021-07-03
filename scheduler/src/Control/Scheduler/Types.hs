@@ -30,15 +30,16 @@ module Control.Scheduler.Types
   , MutexException(..)
   ) where
 
-import Control.Prim.Concurrent (ThreadId)
-import Control.Prim.Concurrent.MVar
-import Control.Prim.Exception
 import Control.Scheduler.Computation
 import Control.Scheduler.Queue
-import Data.Prim.Class
-import Data.Prim.Array
-import Data.Prim.PVar
-import Data.Prim.Ref
+import Primal.Array
+import Primal.Concurrent (ThreadId)
+import Primal.Concurrent.MVar
+import Primal.Exception
+import Primal.Monad
+import Primal.Ref
+import Primal.Unbox
+import Primal.Unbox.Class
 
 -- | Computed results of scheduled jobs.
 --
@@ -83,7 +84,7 @@ instance Traversable Results where
 data Jobs a s = Jobs
   { jobsNumWorkers      :: {-# UNPACK #-} !Int
   , jobsQueue           :: !(JQueue a s)
-  , jobsQueueCount      :: !(PVar Int s)
+  , jobsQueueCount      :: !(URef Int s)
   , jobsSchedulerStatus :: !(MVar SchedulerStatus s)
   }
 
@@ -138,15 +139,15 @@ data SchedulerWS ws a s = SchedulerWS
 data WorkerStates ws s = WorkerStates
   { _workerStatesComp  :: !Comp
   , _workerStatesArray :: !(SBArray ws)
-  , _workerStatesMutex :: !(Ref Bool s)
+  , _workerStatesMutex :: !(URef Bool s)
   }
 
 -- | This identifier is needed for tracking batches.
 newtype BatchId = BatchId { getBatchId :: Int }
   deriving (Show, Eq, Ord)
 
-instance Prim BatchId where
-  type PrimBase BatchId = Int
+instance Unbox BatchId where
+  type UnboxIso BatchId = Int
 
 instance Atomic BatchId
 instance AtomicCount BatchId
@@ -156,8 +157,8 @@ instance AtomicCount BatchId
 --
 -- @since 1.5.0
 data Batch a s = Batch
-  { batchCancel :: a -> ST s Bool
-  , batchCancelWith :: a -> ST s Bool
+  { batchCancel      :: a -> ST s Bool
+  , batchCancelWith  :: a -> ST s Bool
   , batchHasFinished :: ST s Bool
   }
 
@@ -170,7 +171,7 @@ data GlobalScheduler m =
   GlobalScheduler
     { globalSchedulerComp         :: !Comp
     , globalSchedulerMVar         :: !(MVar (Scheduler () RW) RW)
-    , globalSchedulerThreadIdsRef :: !(Ref [ThreadId] RW)
+    , globalSchedulerThreadIdsRef :: !(BRef [ThreadId] RW)
     }
 
 

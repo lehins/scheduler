@@ -26,17 +26,17 @@ module Control.Scheduler.Queue
   , unblockPopJQueue
   ) where
 
-import Control.Prim.Concurrent.MVar
-import Control.Prim.Monad
+import Primal.Concurrent.MVar
+import Primal.Monad
 import Data.Maybe
-import Data.Prim.Ref
+import Primal.Ref
 
 -- | A blocking unbounded queue that keeps the jobs in FIFO order and the results Refs
 -- in reversed
 data Queue a s = Queue
   { qQueue   :: ![Job a s]
   , qStack   :: ![Job a s]
-  , qResults :: ![Ref (Maybe a) s]
+  , qResults :: ![BRef (Maybe a) s]
   , qBaton   :: {-# UNPACK #-}!(MVar () s)
   }
 
@@ -62,19 +62,19 @@ popQueue queue =
 {-# INLINEABLE popQueue #-}
 
 data Job a s
-  = Job {-# UNPACK #-} !(Ref (Maybe a) s) (WorkerId -> ST s ())
+  = Job {-# UNPACK #-} !(BRef (Maybe a) s) (WorkerId -> ST s ())
   | Job_ (WorkerId -> ST s ())
 
 
 mkJob :: ((a -> ST s ()) -> WorkerId -> ST s ()) -> ST s (Job a s)
 mkJob action = do
-  resRef <- newRef Nothing
-  return $ Job resRef (action (writeRef resRef . Just))
+  resRef <- newBRef Nothing
+  return $ Job resRef (action (writeBRef resRef . Just))
 {-# INLINEABLE mkJob #-}
 
 data JQueue a s =
   JQueue
-    { jqQueueRef :: {-# UNPACK #-}!(Ref (Queue a s) s)
+    { jqQueueRef :: {-# UNPACK #-}!(BRef (Queue a s) s)
     , jqLock     :: {-# UNPACK #-}!(MVar () s)
     }
 
@@ -82,7 +82,7 @@ newJQueue :: ST s (JQueue a s)
 newJQueue = do
   newLock <- newEmptyMVar
   newBaton <- newEmptyMVar
-  queueRef <- newRef (Queue [] [] [] newBaton)
+  queueRef <- newBRef (Queue [] [] [] newBaton)
   return $ JQueue queueRef newLock
 
 -- | Pushes an item onto a queue and returns the previous count.
@@ -90,7 +90,7 @@ pushJQueue :: JQueue a s -> Job a s -> ST s ()
 pushJQueue (JQueue jQueueRef _) job = do
   newBaton <- newEmptyMVar
   join $
-    atomicModifyRef jQueueRef $ \queue@Queue {qStack, qResults, qBaton} ->
+    atomicModifyBRef jQueueRef $ \queue@Queue {qStack, qResults, qBaton} ->
       ( queue
           { qResults =
               case job of
@@ -110,7 +110,7 @@ popJQueue (JQueue jQueueRef lock) = inner
     inner = do
       readMVar lock
       join $
-        atomicModifyRef jQueueRef $ \queue@Queue {qBaton} ->
+        atomicModifyBRef jQueueRef $ \queue@Queue {qBaton} ->
           case popQueue queue of
             Nothing -> (queue, readMVar qBaton >> inner)
             Just (job, newQueue) ->
@@ -132,7 +132,7 @@ blockPopJQueue (JQueue _ lock) = takeMVar lock
 -- still in progress and have not been yet been completed.
 clearPendingJQueue :: JQueue a s -> ST s ()
 clearPendingJQueue (JQueue queueRef _) =
-  atomicModifyRef_ queueRef $ \queue -> (queue {qQueue = [], qStack = []})
+  atomicModifyBRef_ queueRef $ \queue -> (queue {qQueue = [], qStack = []})
 {-# INLINEABLE clearPendingJQueue #-}
 
 
@@ -141,7 +141,7 @@ clearPendingJQueue (JQueue queueRef _) =
 readResults :: JQueue a s -> ST s [a]
 readResults (JQueue jQueueRef _) = do
   results <-
-    atomicModifyRef jQueueRef $ \queue ->
+    atomicModifyBRef jQueueRef $ \queue ->
       (queue {qQueue = [], qStack = [], qResults = []}, qResults queue)
-  catMaybes <$> mapM readRef results
+  catMaybes <$> mapM readBRef results
 {-# INLINEABLE readResults #-}

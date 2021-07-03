@@ -1,4 +1,4 @@
-resolver: lts-16.1
+resolver: lts-18.0
 
 packages:
 - 'scheduler/'
@@ -7,4 +7,11 @@ packages:
 extra-deps:
 - async-pool-0.9.1@sha256:4015140f896c3f1652b06a679b0ade2717d05557970c283ea2c372a71be2a6a1,1605
 - ../primal/primal
-- ../pvar/pvar
+# - github: lehins/primal
+#   commit: fe7461c5bd8634394f5508d89f1e8fe9a10716c0
+#   subdirs:
+#     - primal
+# - github: lehins/pvar
+#   commit: 365c9330c11f73e13f9ac54307004e5f8c06bad1
+#   subdirs:
+#     - pvar

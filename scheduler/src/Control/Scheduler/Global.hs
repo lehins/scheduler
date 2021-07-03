@@ -16,15 +16,16 @@ module Control.Scheduler.Global
   , withGlobalScheduler_
   ) where
 
-import Control.Prim.Concurrent (ThreadId)
-import Control.Prim.Concurrent.MVar
-import Control.Prim.Exception
-import Control.Prim.Monad.Unsafe (unsafePerformIO)
+import Primal.Concurrent (ThreadId)
+import Primal.Concurrent.MVar
+import Primal.Exception
+import Primal.Monad
+import Primal.Monad.Unsafe (unsafePerformIO)
 import Control.Scheduler
 import Control.Scheduler.Internal
 import Control.Scheduler.Types
 import Data.Maybe
-import Data.Prim.Ref
+import Primal.Ref
 
 -- | Global scheduler with `Par` computation strategy that can be used anytime using
 -- `withGlobalScheduler_`
@@ -49,8 +50,8 @@ newGlobalScheduler :: MonadIO m => Comp -> m (GlobalScheduler RW)
 newGlobalScheduler comp =
   liftST $ initGlobalScheduler comp $ \scheduler tids -> do
     mvar <- newMVar scheduler
-    tidsRef <- newRef tids
-    _ <- mkWeakMVar mvar (readRef tidsRef >>= terminateWorkers)
+    tidsRef <- newBRef tids
+    _ <- mkWeakMVar mvar (readBRef tidsRef >>= terminateWorkers)
     pure $
       GlobalScheduler
         { globalSchedulerComp = comp
@@ -68,7 +69,7 @@ withGlobalScheduler_ GlobalScheduler {..} action =
   withRunInST $ \run -> do
     let initializeNewScheduler = do
           initGlobalScheduler globalSchedulerComp $ \scheduler tids -> do
-            oldTids <- atomicModifyRef globalSchedulerThreadIdsRef $ (,) tids
+            oldTids <- atomicModifyBRef globalSchedulerThreadIdsRef $ (,) tids
             terminateWorkers oldTids
             putMVar globalSchedulerMVar scheduler
     mask $ \restore ->

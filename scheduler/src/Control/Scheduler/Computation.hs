@@ -5,7 +5,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 -- |
 -- Module      : Control.Scheduler.Computation
--- Copyright   : (c) Alexey Kuleshevich 2018-2019
+-- Copyright   : (c) Alexey Kuleshevich 2018-2021
 -- License     : BSD3
 -- Maintainer  : Alexey Kuleshevich <lehins@yandex.ru>
 -- Stability   : experimental
@@ -15,10 +15,10 @@ module Control.Scheduler.Computation
   ( Comp(.., Par, Par'), compNumWorkers
   ) where
 
-import Control.Prim.Eval (NFData(..), deepseq)
-import Control.Prim.Concurrent (getNumCapabilities)
-import Control.Prim.Monad.Unsafe (unsafePerformIO)
-import Data.Prim
+import Primal.Eval (NFData(..), deepseq)
+import Primal.Concurrent (getNumCapabilities)
+import Primal.Monad.Unsafe (unsafePerformIO)
+import Data.Word
 
 -- | Computation strategy to use when scheduling work.
 data Comp

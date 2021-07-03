@@ -6,19 +6,20 @@ module Control.SchedulerSpec
   ( spec
   ) where
 
-import Data.Int
-import Control.Prim.Monad
-import Control.Prim.Concurrent (killThread, myThreadId, threadDelay, yield)
-import Control.Prim.Concurrent.MVar
-import Control.DeepSeq
 import qualified Control.Exception as EUnsafe
-import Control.Exception.Base (ArithException(DivideByZero),
-                               AsyncException(ThreadKilled))
 import Control.Scheduler as S
+--import Control.Concurrent.Async
+import UnliftIO.Async
 import Data.Bits (complement)
 import qualified Data.Foldable as F (toList, traverse_)
-import Data.IORef
+import Data.Int
 import Data.List (groupBy, sort, sortOn)
+import Primal.Concurrent (killThread, myThreadId, threadDelay, yield)
+import Primal.Concurrent.MVar
+import Primal.Exception
+import Primal.Eval
+import Primal.Ref
+import Primal.Monad
 import Test.Hspec
 import Test.Hspec.QuickCheck
 import Test.QuickCheck
@@ -29,20 +30,18 @@ import Test.Validity.Functor
 import Test.Validity.Monoid
 import Test.Validity.Ord
 import Test.Validity.Show
-import UnliftIO.Async
-import UnliftIO.Exception hiding (assert)
 #if !MIN_VERSION_base(4,11,0)
 import Data.Semigroup
 #endif
 
 
-concurrentProperty :: Testable prop => prop -> Property
+concurrentProperty :: HasCallStack => Testable prop => prop -> Property
 concurrentProperty = within 2000000
 
-concurrentExpectation :: Expectation -> Property
+concurrentExpectation :: HasCallStack => Expectation -> Property
 concurrentExpectation = concurrentProperty
 
-concurrentPropertyIO :: IO Property -> Property
+concurrentPropertyIO :: HasCallStack => IO Property -> Property
 concurrentPropertyIO = concurrentProperty . monadicIO . run
 
 instance Arbitrary Comp where
@@ -56,13 +55,13 @@ instance Arbitrary NonSeq where
     NonSeq <$>
     frequency [(10, pure Par), (35, ParOn <$> arbitrary), (35, ParN . getSmall <$> arbitrary)]
 
-prop_SameList :: Comp -> [Int] -> Property
+prop_SameList :: HasCallStack => Comp -> [Int] -> Property
 prop_SameList comp xs =
   concurrentPropertyIO $ do
     xs' <- withScheduler comp $ \scheduler -> mapM_ (scheduleWork scheduler . return) xs
     return (xs === xs')
 
-prop_Recursive :: Comp -> [Int] -> Property
+prop_Recursive :: HasCallStack => Comp -> [Int] -> Property
 prop_Recursive comp xs =
   concurrentPropertyIO $ do
     xs' <- withScheduler comp (schedule xs)
@@ -72,7 +71,7 @@ prop_Recursive comp xs =
     schedule (y:ys) scheduler = scheduleWork scheduler (schedule ys scheduler >> return y)
 
 
-prop_Serially :: Comp -> [Int] -> Property
+prop_Serially :: HasCallStack => Comp -> [Int] -> Property
 prop_Serially comp xs =
   concurrentPropertyIO $ do
     xs' <- schedule xs
@@ -84,7 +83,7 @@ prop_Serially comp xs =
       ys' <- schedule ys
       return (y':ys')
 
-prop_Nested :: Comp -> [Int] -> Property
+prop_Nested :: HasCallStack => Comp -> [Int] -> Property
 prop_Nested comp xs =
   concurrentPropertyIO $ do
     xs' <- schedule xs
@@ -95,36 +94,36 @@ prop_Nested comp xs =
       withScheduler comp (\s -> scheduleWork s (schedule ys >>= \ys' -> return (y : concat ys')))
 
 -- | Check whether all jobs have been completed (similar roprop_Traverse)
-prop_AllJobsProcessed :: Comp -> [Int] -> Property
+prop_AllJobsProcessed :: HasCallStack => Comp -> [Int] -> Property
 prop_AllJobsProcessed comp jobs =
   concurrentProperty $
   monadicIO
     ((=== jobs) <$>
      run (withScheduler comp $ \scheduler -> mapM_ (scheduleWork scheduler . pure) jobs))
 
-prop_Traverse :: Comp -> [Int] -> Fun Int Int -> Property
+prop_Traverse :: HasCallStack => Comp -> [Int] -> Fun Int Int -> Property
 prop_Traverse comp xs f =
   concurrentPropertyIO $ (===) <$> traverse f' xs <*> traverseConcurrently comp f' xs
   where
     f' = pure . apply f
 
-replicateSeq :: (Int -> IO Int -> IO [Int]) -> Int -> Fun Int Int -> Property
+replicateSeq :: HasCallStack => (Int -> IO Int -> IO [Int]) -> Int -> Fun Int Int -> Property
 replicateSeq justAs n f =
   concurrentPropertyIO $ do
-    iRef <- newIORef 0
-    jRef <- newIORef 0
-    let g ref = atomicModifyIORef' ref (\i -> (apply f i, i + 1))
+    iRef <- newBRef 0
+    jRef <- newBRef 0
+    let g ref = atomicModifyBRef ref (\i -> (apply f i, i + 1))
     (===) <$> S.replicateConcurrently Seq n (g jRef) <*> justAs n (g iRef)
 
-prop_ReplicateM :: Int -> Fun Int Int -> Property
+prop_ReplicateM :: HasCallStack => Int -> Fun Int Int -> Property
 prop_ReplicateM i = concurrentProperty . replicateSeq replicateM i
 
-prop_ReplicateWorkSeq :: Int -> Fun Int Int -> Property
+prop_ReplicateWorkSeq :: HasCallStack => Int -> Fun Int Int -> Property
 prop_ReplicateWorkSeq i =
   concurrentProperty . replicateSeq (\ n g -> withScheduler Seq (\s -> replicateWork s n g)) i
 
 
-prop_ManyJobsInChunks :: Property
+prop_ManyJobsInChunks :: HasCallStack => Property
 prop_ManyJobsInChunks = noShrinking $ \ comp (jss :: [[Int]]) ->
   concurrentExpectation $ do
     xs <- withScheduler comp $ \s ->
@@ -133,7 +132,7 @@ prop_ManyJobsInChunks = noShrinking $ \ comp (jss :: [[Int]]) ->
         rs `shouldBe` js
     xs `shouldBe` []
 
-prop_ArbitraryCompNested :: [(Comp, Int)] -> Property
+prop_ArbitraryCompNested :: HasCallStack => [(Comp, Int)] -> Property
 prop_ArbitraryCompNested xs =
   concurrentPropertyIO $ do
     xs' <- schedule xs
@@ -144,7 +143,7 @@ prop_ArbitraryCompNested xs =
       withScheduler c (\s -> scheduleWork s (schedule ys >>= \ys' -> return (y : concat ys')))
 
 -- | Ensure proper exception handling.
-prop_CatchDivideByZero :: Comp -> Int -> [Positive Int] -> Property
+prop_CatchDivideByZero :: HasCallStack => Comp -> Int -> [Positive Int] -> Property
 prop_CatchDivideByZero comp k xs =
   concurrentProperty $
   assertExceptionIO
@@ -155,7 +154,7 @@ prop_CatchDivideByZero comp k xs =
        (map getPositive xs ++ [0] ++ map getPositive xs))
 
 -- | Ensure proper exception handling.
-prop_CatchDivideByZeroNested :: Comp -> Int -> Positive Int -> Property
+prop_CatchDivideByZeroNested :: HasCallStack => Comp -> Int -> Positive Int -> Property
 prop_CatchDivideByZeroNested comp a (Positive k) =
   concurrentProperty $ assertExceptionIO (== DivideByZero) (schedule k)
   where
@@ -166,7 +165,7 @@ prop_CatchDivideByZeroNested comp a (Positive k) =
 
 
 -- | Make sure one co-worker can kill another one, of course when there are at least two of.
-prop_KillBlockedCoworker :: Comp -> Property
+prop_KillBlockedCoworker :: HasCallStack => Comp -> Property
 prop_KillBlockedCoworker comp =
   concurrentProperty $
   assertExceptionIO
@@ -180,7 +179,7 @@ prop_KillBlockedCoworker comp =
            scheduleWork scheduler $ return ((1 :: Int) `div` (0 :: Int)))
 
 -- | Make sure one co-worker can kill another one, of course when there are at least two of.
-prop_KillSleepingCoworker :: Comp -> Property
+prop_KillSleepingCoworker :: HasCallStack => Comp -> Property
 prop_KillSleepingCoworker comp =
   concurrentProperty $
   assertExceptionIO
@@ -192,18 +191,18 @@ prop_KillSleepingCoworker comp =
          error "This should never happen! Thread should have been killed by now.")
 
 
-prop_ExpectAsyncException :: Comp -> Property
+prop_ExpectAsyncException :: HasCallStack => Comp -> Property
 prop_ExpectAsyncException comp =
   concurrentProperty $
   let didAWorkerDie =
-        EUnsafe.handleJust EUnsafe.asyncExceptionFromException (return . (== EUnsafe.ThreadKilled)) .
+        EUnsafe.handleJust EUnsafe.asyncExceptionFromException (return . (== ThreadKilled)) .
         fmap or
    in (monadicIO . run . didAWorkerDie . withScheduler comp $ \s ->
          scheduleWork s (myThreadId >>= killThread >> pure False)) .&&.
       (monadicIO . run . fmap not . didAWorkerDie . withScheduler Par $ \s ->
          scheduleWork s $ pure False)
 
-prop_WorkerCaughtAsyncException :: Positive Int -> Property
+prop_WorkerCaughtAsyncException :: HasCallStack => Positive Int -> Property
 prop_WorkerCaughtAsyncException (Positive n) =
   concurrentProperty $
   assertExceptionIO (== DivideByZero) $ do
@@ -213,22 +212,22 @@ prop_WorkerCaughtAsyncException (Positive n) =
       withScheduler_ (ParN 2) $ \scheduler -> do
         scheduleWork scheduler $ do
           threadDelay (n `mod` 1000000)
-          EUnsafe.throwIO DivideByZero
+          throw DivideByZero
         scheduleWork scheduler $ do
           e <- tryAny $ replicateM_ 5 $ threadDelay 1000000
           case e of
-            Right _ -> throwString "Impossible, shouldn't have waited for so long"
+            Right _ -> error "Impossible, shouldn't have waited for so long"
             Left exc -> do
               putMVar lock exc
-              throwString $
+              error $
                 "I should not have survived: " ++ displayException (exc :: SomeException)
-    void $ throwString $
+    void $ error $
       case result of
-        Left innerError -> "Scheduled job cought async exception: " ++ displayException innerError
+        Left innerError -> "Scheduled job caught async exception: " ++ displayException innerError
         Right () -> "Scheduler terminated properly. Should not have happened"
 
 -- | Make sure there is no problems if sub-schedules worker get killed
-prop_AllWorkersDied :: Comp -> Comp -> Positive Int -> Property
+prop_AllWorkersDied :: HasCallStack => Comp -> Comp -> Positive Int -> Property
 prop_AllWorkersDied comp1 comp (Positive n) =
   concurrentProperty $
   assertAsyncExceptionIO
@@ -239,17 +238,17 @@ prop_AllWorkersDied comp1 comp (Positive n) =
          (withScheduler_ comp $ \scheduler ->
             replicateM_ n (scheduleWork scheduler (myThreadId >>= killThread))))
 
-prop_FinishEarly_ :: NonSeq -> Property
+prop_FinishEarly_ :: HasCallStack => NonSeq -> Property
 prop_FinishEarly_ (NonSeq comp) =
   concurrentPropertyIO $ do
-    ref <- newIORef True
+    ref <- newBRef True
     withScheduler_ comp $ \scheduler ->
       scheduleWork_
         scheduler
-        (terminate_ scheduler >> yield >> threadDelay 10000 >> writeIORef ref False)
-    counterexample "Scheduler did not terminate early" <$> readIORef ref
+        (terminate_ scheduler >> yield >> threadDelay 10000 >> writeBRef ref False)
+    counterexample "Scheduler did not terminate early" <$> readBRef ref
 
-prop_FinishEarly :: Comp -> Property
+prop_FinishEarly :: HasCallStack => Comp -> Property
 prop_FinishEarly comp =
   concurrentPropertyIO $ do
     let scheduleJobs scheduler = do
@@ -259,7 +258,7 @@ prop_FinishEarly comp =
     res' <- withSchedulerR comp scheduleJobs
     pure (res === [2, 3] .&&. res' === FinishedEarly [2] 3)
 
-prop_FinishEarlyWith :: Comp -> Int -> Property
+prop_FinishEarlyWith :: HasCallStack => Comp -> Int -> Property
 prop_FinishEarlyWith comp n =
   concurrentPropertyIO $ do
     let scheduleJobs scheduler = do
@@ -269,7 +268,7 @@ prop_FinishEarlyWith comp n =
     res' <- withSchedulerR comp scheduleJobs
     pure (res === [n] .&&. res' === FinishedEarlyWith n)
 
-prop_FinishBeforeStarting :: Comp -> Property
+prop_FinishBeforeStarting :: HasCallStack => Comp -> Property
 prop_FinishBeforeStarting comp =
   concurrentPropertyIO $ do
     res <-
@@ -278,7 +277,7 @@ prop_FinishBeforeStarting comp =
         scheduleWork scheduler (threadDelay 10000 >> pure 2)
     pure (res === [1 :: Int])
 
-prop_FinishWithBeforeStarting :: Comp -> Int -> Property
+prop_FinishWithBeforeStarting :: HasCallStack => Comp -> Int -> Property
 prop_FinishWithBeforeStarting comp n =
   concurrentPropertyIO $ do
     res <-
@@ -287,24 +286,24 @@ prop_FinishWithBeforeStarting comp n =
         scheduleWork scheduler $ pure (complement n)
     pure (res === [n])
 
-prop_TrivialSchedulerSameAsSeq_ :: [Int] -> Property
+prop_TrivialSchedulerSameAsSeq_ :: HasCallStack => [Int] -> Property
 prop_TrivialSchedulerSameAsSeq_ zs =
   concurrentPropertyIO $ do
-    let consRef xsRef x = atomicModifyIORef' xsRef $ \ xs -> (x:xs, ())
+    let consRef xsRef x = atomicModifyBRef_ xsRef (x:)
         trivial = trivialScheduler_
-    nRef <- newIORef False
-    xRefs <- newIORef []
-    yRefs <- newIORef []
+    nRef <- newBRef False
+    xRefs <- newBRef []
+    yRefs <- newBRef []
     withScheduler_ Seq $ \scheduler -> do
-      writeIORef nRef (numWorkers scheduler == numWorkers trivial)
+      writeBRef nRef (numWorkers scheduler == numWorkers trivial)
       mapM_ (scheduleWork_ scheduler . consRef xRefs) zs
     mapM_ (scheduleWork_ trivial . consRef yRefs) zs
-    nSame <- readIORef nRef
-    xs <- readIORef xRefs
-    ys <- readIORef yRefs
+    nSame <- readBRef nRef
+    xs <- readBRef xRefs
+    ys <- readBRef yRefs
     pure (nSame .&&. xs === ys)
 
-prop_SameAsTrivialScheduler :: Comp -> [Int] -> Fun Int Int -> Property
+prop_SameAsTrivialScheduler :: HasCallStack => Comp -> [Int] -> Fun Int Int -> Property
 prop_SameAsTrivialScheduler comp zs f =
   concurrentPropertyIO $ do
     let schedule scheduler = forM_ zs (scheduleWork scheduler . pure . apply f)
@@ -355,11 +354,11 @@ instance Exception Elem
 
 
 -- | Check if an element is in the list with an exception
-prop_TraverseConcurrently_ :: Comp -> [Int] -> Int -> Property
+prop_TraverseConcurrently_ :: HasCallStack => Comp -> [Int] -> Int -> Property
 prop_TraverseConcurrently_ comp xs x =
   concurrentPropertyIO $ do
     let f i
-          | i == x = throwIO $ Elem x
+          | i == x = throw $ Elem x
           | otherwise = pure ()
     eRes :: Either Elem () <- try $ traverse_ f xs
     eRes' <- try $ traverseConcurrently_ comp f xs
@@ -368,11 +367,11 @@ prop_TraverseConcurrently_ comp xs x =
 -- TODO: fix the infinite property for single worker schedulers
 -- | Check if an element is in the list with an exception, where we know that list is infinite and
 -- element is part of that list.
-prop_TraverseConcurrentlyInfinite_ :: NonSeq -> [Int] -> Int -> Property
+prop_TraverseConcurrentlyInfinite_ :: HasCallStack => NonSeq -> [Int] -> Int -> Property
 prop_TraverseConcurrentlyInfinite_ (NonSeq comp) xs x =
   concurrentPropertyIO $ do
     let f i
-          | i == x = throwIO $ Elem x
+          | i == x = throw $ Elem x
           | otherwise = pure ()
         xs' = xs ++ [x] -- ++ [0 ..]
     eRes :: Either Elem () <- try $ F.traverse_ f xs'
@@ -380,17 +379,17 @@ prop_TraverseConcurrentlyInfinite_ (NonSeq comp) xs x =
     return (eRes === eRes')
 
 
-prop_WorkerStateExclusive :: Comp -> NonNegative Int -> Property
+prop_WorkerStateExclusive :: HasCallStack => Comp -> NonNegative Int -> Property
 prop_WorkerStateExclusive comp (NonNegative n) =
   concurrentExpectation $ do
-    state <- initWorkerStates comp (\wid -> (,) wid <$> newIORef (0 :: Int))
+    state <- initWorkerStates comp (\wid -> (,) wid <$> newBRef (0 :: Int))
     workerStatesComp state `shouldBe` comp
     let nWorkers = compNumWorkers comp
     let scheduleJobs schedulerWS = do
           replicateM n $
             scheduleWorkState schedulerWS $ \(wid, ref) -> do
-              counter <- readIORef ref
-              writeIORef ref (counter + 1)
+              counter <- readBRef ref
+              writeBRef ref (counter + 1)
               pure (wid, counter)
         gather = map (sortOn snd) . groupBy (\x y -> fst x == fst y) . sortOn fst
         isMonotonicStartingAt _ [] = True
@@ -408,10 +407,10 @@ prop_WorkerStateExclusive comp (NonNegative n) =
       numWorkers (unwrapSchedulerWS schedulerWS) `shouldBe` nWorkers
       replicateM (10 * n) $
         scheduleWorkState_ schedulerWS $ \(wid, ref) -> do
-          counter <- readIORef ref
+          counter <- readBRef ref
           when (counter > 0) $ snd (last (gathered' !! getWorkerId wid)) `shouldBe` pred counter
 
-prop_MutexException :: Comp -> Property
+prop_MutexException :: HasCallStack => Comp -> Property
 prop_MutexException comp =
   concurrentProperty $
   assertExceptionIO (== MutexException) $ do
@@ -419,7 +418,7 @@ prop_MutexException comp =
     withSchedulerWS_ state $ \schedulerWS ->
       scheduleWorkState_ schedulerWS $ \_s -> withSchedulerWS_ state $ \_s' -> pure ()
 
-prop_FindCancelResume :: Comp -> Int64 -> ([Int64], [Int64]) -> [Int64] -> Property
+prop_FindCancelResume :: HasCallStack => Comp -> Int64 -> ([Int64], [Int64]) -> [Int64] -> Property
 prop_FindCancelResume comp x' (xs1', xs2') ys =
   concurrentExpectation $ do
     let f = (10 *)
@@ -462,17 +461,17 @@ prop_FindCancelResume comp x' (xs1', xs2') ys =
       | a == b = orderedPartialPrefixOf as bs
       | otherwise = orderedPartialPrefixOf (a : as) bs
 
--- prop_CancelBatchEarly_ :: NonSeq -> Property
+-- prop_CancelBatchEarly_ :: HasCallStack => NonSeq -> Property
 -- prop_CancelBatchEarly_ (NonSeq comp) =
 --   concurrentPropertyIO $ do
---     ref <- newIORef True
+--     ref <- newBRef True
 --     withScheduler_ comp $ \scheduler ->
 --       scheduleWork_
 --         scheduler
---         (cancelBatch_ scheduler >> yield >> threadDelay 10000 >> writeIORef ref False)
---     counterexample "Scheduler did not terminate early" <$> readIORef ref
+--         (cancelBatch_ scheduler >> yield >> threadDelay 10000 >> writeBRef ref False)
+--     counterexample "Scheduler did not terminate early" <$> readBRef ref
 
--- prop_FinishEarly :: Comp -> Property
+-- prop_FinishEarly :: HasCallStack => Comp -> Property
 -- prop_FinishEarly comp =
 --   concurrentPropertyIO $ do
 --     let scheduleJobs scheduler = do
@@ -482,7 +481,7 @@ prop_FindCancelResume comp x' (xs1', xs2') ys =
 --     res' <- withSchedulerR comp scheduleJobs
 --     pure (res === [2, 3] .&&. res' === FinishedEarly [2] 3)
 
--- prop_FinishEarlyWith :: Comp -> Int -> Property
+-- prop_FinishEarlyWith :: HasCallStack => Comp -> Int -> Property
 -- prop_FinishEarlyWith comp n =
 --   concurrentPropertyIO $ do
 --     let scheduleJobs scheduler = do
@@ -574,7 +573,7 @@ spec = do
     prop "KillBlockedCoworker" prop_KillBlockedCoworker
     prop "KillSleepingCoworker" prop_KillSleepingCoworker
     prop "ExpectAsyncException" prop_ExpectAsyncException
-    prop "WorkerCaughtAsyncException" prop_WorkerCaughtAsyncException
+    fit "WorkerCaughtAsyncException" $ property prop_WorkerCaughtAsyncException
     prop "AllWorkersDied" prop_AllWorkersDied
     prop "traverseConcurrently_" prop_TraverseConcurrently_
     prop "traverseConcurrentlyInfinite_" prop_TraverseConcurrentlyInfinite_
