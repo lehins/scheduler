@@ -6,7 +6,6 @@ module Control.SchedulerSpec
   ( spec
   ) where
 
-import qualified Control.Exception as EUnsafe
 import Control.Scheduler as S
 import UnliftIO.Async
 import Data.Bits (complement)
@@ -193,9 +192,8 @@ prop_KillSleepingCoworker comp =
 prop_ExpectAsyncException :: HasCallStack => Comp -> Property
 prop_ExpectAsyncException comp =
   concurrentProperty $
-  let didAWorkerDie =
-        EUnsafe.handleJust EUnsafe.asyncExceptionFromException (return . (== ThreadKilled)) .
-        fmap or
+  let didAWorkerDie m =
+        catchJust asyncExceptionFromException (or <$> m) (return . (== ThreadKilled))
    in (monadicIO . run . didAWorkerDie . withScheduler comp $ \s ->
          scheduleWork s (myThreadId >>= killThread >> pure False)) .&&.
       (monadicIO . run . fmap not . didAWorkerDie . withScheduler Par $ \s ->

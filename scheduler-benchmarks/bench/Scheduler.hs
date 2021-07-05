@@ -2,20 +2,22 @@
 
 module Main where
 
-import qualified Control.Concurrent.Async as A (mapConcurrently, replicateConcurrently)
+import Control.Concurrent (getNumCapabilities)
+import qualified Control.Concurrent.Async as A (mapConcurrently,
+                                                replicateConcurrently)
+import Control.Concurrent.Async.Pool as AsyncPool
 import Control.Monad.Par (IVar, Par, get, newFull_, runParIO)
 import Control.Parallel (par)
 import Control.Scheduler
 import Control.Scheduler.Global
-import Control.Concurrent (getNumCapabilities)
-import Control.Concurrent.Async.Pool as AsyncPool
 import Criterion.Main
 import Data.Foldable as F
 import Data.IORef
+import Primal.Eval
+import Primal.Monad
 import Streamly (asyncly)
 import qualified Streamly.Prelude as S
 import UnliftIO.Async (pooledMapConcurrently, pooledReplicateConcurrently)
-
 
 
 main :: IO ()
@@ -93,12 +95,12 @@ mkBenchReplicate ::
 mkBenchReplicate _taskGroup name n x fxIO fxPar =
   bgroup
     ("replicate/" <> name <> str)
-    [ bench "scheduler/replicateConcurrently" $
-      nfIO $ replicateConcurrently Par n (newIORef x >>= fxIO)
-    , bench "scheduler/replicateConcurrently_" $
+    [ bench "scheduler/replicateConcurrently_" $
       nfIO $ replicateConcurrently_ Par n (newIORef x >>= fxIO >>= \ !_ -> pure ())
     , bench "scheduler/replicateConcurrently_ (global)" $
       nfIO $ replicateConcurrentlyGlobal_ n (newIORef x >>= fxIO >>= \ !_ -> pure ())
+    , bench "scheduler/replicateConcurrently" $
+      nfIO $ replicateConcurrently Par n (newIORef x >>= fxIO)
     , bench "unliftio/pooledReplicateConcurrently" $
       nfIO $ pooledReplicateConcurrently n (newIORef x >>= fxIO)
     , bench "streamly/replicateM" $
