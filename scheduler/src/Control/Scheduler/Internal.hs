@@ -9,7 +9,7 @@
 {-# OPTIONS_HADDOCK hide, not-home #-}
 -- |
 -- Module      : Control.Scheduler.Internal
--- Copyright   : (c) Alexey Kuleshevich 2018-2020
+-- Copyright   : (c) Alexey Kuleshevich 2018-2021
 -- License     : BSD3
 -- Maintainer  : Alexey Kuleshevich <lehins@yandex.ru>
 -- Stability   : experimental
@@ -151,7 +151,7 @@ withTrivialSchedulerR action = do
   readBRef finResRef >>= \case
     Just rs -> pure $ reverseResults rs
     Nothing -> do
-      mEarly <- liftST $ takeBatchEarly
+      mEarly <- liftST takeBatchEarly
       reverseResults <$> liftST (collectResults mEarly takeResults)
 
 
@@ -379,7 +379,7 @@ withSchedulerInternal comp submitWork collect onScheduler = do
               scheduleJobs_ jobs (\_ -> atomicSubURef_ jobsQueueCount 1)
               unblockPopJQueue jobsQueue
               status <- takeMVar jobsSchedulerStatus
-                -- \ wait for all worker to finish. If any one of the workers had a problem, then
+                -- \ wait for all workers to finish. If any one of the workers had a problem, then
                 -- this MVar will contain an exception
               case status of
                 SchedulerWorkerException (WorkerException exc)

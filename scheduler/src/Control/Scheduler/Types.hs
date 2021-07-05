@@ -5,7 +5,7 @@
 {-# OPTIONS_HADDOCK hide, not-home #-}
 -- |
 -- Module      : Control.Scheduler.Types
--- Copyright   : (c) Alexey Kuleshevich 2018-2020
+-- Copyright   : (c) Alexey Kuleshevich 2018-2021
 -- License     : BSD3
 -- Maintainer  : Alexey Kuleshevich <lehins@yandex.ru>
 -- Stability   : experimental
@@ -201,8 +201,8 @@ instance Exception WorkerException
 
 data WorkerTerminateException =
   WorkerTerminateException
-  -- ^ When a co-worker dies of some exception, all the other ones will be terminated
-  -- asynchronously with this one.
+  -- ^ When a co-worker dies of some exception, all the workers will be terminated
+  -- asynchronously with this exception.
   deriving (Show)
 
 
