@@ -8,7 +8,6 @@ module Control.SchedulerSpec
 
 import qualified Control.Exception as EUnsafe
 import Control.Scheduler as S
---import Control.Concurrent.Async
 import UnliftIO.Async
 import Data.Bits (complement)
 import qualified Data.Foldable as F (toList, traverse_)
@@ -211,10 +210,10 @@ prop_WorkerCaughtAsyncException (Positive n) =
       race (readMVar lock) $
       withScheduler_ (ParN 2) $ \scheduler -> do
         scheduleWork scheduler $ do
-          threadDelay (n `mod` 1000000)
-          throw DivideByZero
+          threadDelay (n `mod` 100000)
+          raise DivideByZero
         scheduleWork scheduler $ do
-          e <- tryAny $ replicateM_ 5 $ threadDelay 1000000
+          e <- tryAllSync $ replicateM_ 5 $ threadDelay 100000
           case e of
             Right _ -> error "Impossible, shouldn't have waited for so long"
             Left exc -> do
@@ -358,7 +357,7 @@ prop_TraverseConcurrently_ :: HasCallStack => Comp -> [Int] -> Int -> Property
 prop_TraverseConcurrently_ comp xs x =
   concurrentPropertyIO $ do
     let f i
-          | i == x = throw $ Elem x
+          | i == x = raise $ Elem x
           | otherwise = pure ()
     eRes :: Either Elem () <- try $ traverse_ f xs
     eRes' <- try $ traverseConcurrently_ comp f xs
@@ -371,7 +370,7 @@ prop_TraverseConcurrentlyInfinite_ :: HasCallStack => NonSeq -> [Int] -> Int -> 
 prop_TraverseConcurrentlyInfinite_ (NonSeq comp) xs x =
   concurrentPropertyIO $ do
     let f i
-          | i == x = throw $ Elem x
+          | i == x = raise $ Elem x
           | otherwise = pure ()
         xs' = xs ++ [x] -- ++ [0 ..]
     eRes :: Either Elem () <- try $ F.traverse_ f xs'
@@ -573,7 +572,7 @@ spec = do
     prop "KillBlockedCoworker" prop_KillBlockedCoworker
     prop "KillSleepingCoworker" prop_KillSleepingCoworker
     prop "ExpectAsyncException" prop_ExpectAsyncException
-    fit "WorkerCaughtAsyncException" $ property prop_WorkerCaughtAsyncException
+    prop "WorkerCaughtAsyncException" prop_WorkerCaughtAsyncException
     prop "AllWorkersDied" prop_AllWorkersDied
     prop "traverseConcurrently_" prop_TraverseConcurrently_
     prop "traverseConcurrentlyInfinite_" prop_TraverseConcurrentlyInfinite_
@@ -620,12 +619,12 @@ assertAsyncExceptionIO isAsyncExc action =
   monadicIO $ do
     hasFailed <-
       run $
-      EUnsafe.catch
+      catchAll
         (do res <- action
             res `deepseq` return False)
         (\exc ->
-           case EUnsafe.asyncExceptionFromException exc of
+           case asyncExceptionFromException exc of
              Just asyncExc
                | isAsyncExc asyncExc -> displayException asyncExc `deepseq` pure True
-             _ -> EUnsafe.throwIO exc)
+             _ -> raise exc)
     assert hasFailed

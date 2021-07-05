@@ -45,7 +45,6 @@ import Primal.Array
 import Primal.Ref
 
 
-
 -- | Initialize a separate state for each worker.
 --
 -- @since 1.4.0
@@ -79,7 +78,7 @@ withSchedulerWSInternal withScheduler' states action = bracket lockState unlockS
       | wasLocked = pure ()
       | otherwise = atomicWriteURef mutex False
     runSchedulerWS isLocked
-      | isLocked = throw MutexException
+      | isLocked = raise MutexException
       | otherwise =
         withScheduler' (_workerStatesComp states) $ \scheduler ->
           action (SchedulerWS states scheduler)
@@ -187,7 +186,7 @@ withTrivialSchedulerRIO action = withRunInST $ \ run -> do
                 bumpCurrentBatchId
                 finishEarly <- collectResults (Just early) takeResults
                 atomicWriteBRef finResRef (Just finishEarly)
-                throw TerminateEarlyException
+                raise TerminateEarlyException
           , _waitForCurrentBatch = do
                 mEarly <- takeBatchEarly
                 rs <- collectResults mEarly . pure =<< takeResults
@@ -257,25 +256,26 @@ runWorker unmask wId Jobs {jobsQueue, jobsQueueCount, jobsSchedulerStatus} = go
           | Just WorkerTerminateException <- asyncExceptionFromException uExc -> return ()
         Left uExc
           | Just CancelBatchException <- asyncExceptionFromException uExc -> go
-        Left uExc -> throw uExc
+        Left uExc -> raise uExc
     go = do
-      eRes <- try $ do
+      eRes <- tryAll $ do
         job <- popJQueue jobsQueue
         unmask (job wId >> atomicSubFetchOldURef jobsQueueCount 1)
       -- \ popJQueue can block, but it is still interruptable
       case eRes of
-        Right 1 -> try (putMVar jobsSchedulerStatus SchedulerIdle) >>= onBlockedMVar
+        Right 1 -> tryAllAsync (putMVar jobsSchedulerStatus SchedulerIdle) >>= onBlockedMVar
         Right _ -> go
         Left exc
           | Just WorkerTerminateException <- asyncExceptionFromException exc -> return ()
         Left exc
           | Just CancelBatchException <- asyncExceptionFromException exc -> go
         Left exc -> do
+          --liftIO $ print exc
           eUnblocked <-
-            try $ putMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
+            tryAllAsync $ putMVar jobsSchedulerStatus (SchedulerWorkerException (WorkerException exc))
           -- \ without blocking with putMVar here we would not be able to report an
           -- exception in the main thread, especially if `exc` is asynchronous.
-          unless (isSyncException exc) $ throw exc
+          unless (isSyncException exc) $ raise exc
           onBlockedMVar eUnblocked
 {-# INLINEABLE runWorker #-}
 
@@ -318,7 +318,7 @@ initScheduler comp submitWork collect = do
                     EarlyWith r -> pure $ FinishedEarlyWith r
                 bumpCurrentBatchId
                 atomicWriteBRef earlyTerminationResultRef $ Just finishEarly
-                throw TerminateEarlyException
+                raise TerminateEarlyException
           , _waitForCurrentBatch =
               do scheduleJobs_ jobs (\_ -> atomicSubURef_ jobsQueueCount 1)
                  unblockPopJQueue jobsQueue
@@ -330,9 +330,9 @@ initScheduler comp submitWork collect = do
                        case fromException exc of
                          Just CancelBatchException -> do
                            _ <- clearPendingJQueue jobsQueue
-                           traverse_ (`throwTo` CancelBatchException) tids
+                           traverse_ (`raiseTo` CancelBatchException) tids
                            collectResults mEarly . pure =<< collect jobsQueue
-                         Nothing -> throw exc
+                         Nothing -> raise exc
                      SchedulerIdle -> do
                        blockPopJQueue jobsQueue
                        bumpCurrentBatchId
@@ -348,7 +348,7 @@ initScheduler comp submitWork collect = do
                 when b $ do
                   blockPopJQueue jobsQueue
                   atomicWriteBRef batchEarlyRef $ Just early
-                  throw CancelBatchException
+                  raise CancelBatchException
                 pure b
           }
   pure (jobs, mkScheduler)
@@ -387,7 +387,7 @@ withSchedulerInternal comp submitWork collect onScheduler = do
                   | Just CancelBatchException <- fromException exc -> do
                       mEarly <- _batchEarly scheduler
                       collectResults mEarly (collect jobsQueue)
-                  | otherwise -> throw exc
+                  | otherwise -> raise exc
                   -- \ Here we need to unwrap the legit worker exception and rethrow it, so
                   -- the main thread will think like it's his own
                 SchedulerIdle -> do
@@ -423,7 +423,7 @@ spawnWorkers jobs@Jobs {jobsNumWorkers} =
 {-# INLINEABLE spawnWorkers #-}
 
 terminateWorkers :: Primal RW m => [ThreadId] -> m ()
-terminateWorkers = traverse_ (`throwTo` WorkerTerminateException)
+terminateWorkers = traverse_ (`raiseTo` WorkerTerminateException)
 
 -- | Conversion to a list. Elements are expected to be in the orignal LIFO order, so
 -- calling `reverse` is still necessary for getting the results in FIFO order.
