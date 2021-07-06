@@ -106,29 +106,30 @@ unEarly (EarlyWith r) = r
 -- `Control.Scheduler.withScheduler_` for ways to construct and use this data type.
 --
 -- @since 1.0.0
-data Scheduler m a = Scheduler
+data Scheduler s a = Scheduler
   { _numWorkers          :: {-# UNPACK #-} !Int
-  , _scheduleWorkId      :: (WorkerId -> m a) -> m ()
-  , _terminate           :: Early a -> m a
-  , _waitForCurrentBatch :: m (Results a)
-  , _earlyResults        :: m (Maybe (Results a))
-  , _currentBatchId      :: m BatchId
+  , _scheduleWorkId      :: (WorkerId -> ST s a) -> ST s ()
+  , _terminate           :: Early a -> ST s a
+  , _waitForCurrentBatch :: ST s (Results a)
+  , _earlyResults        :: ST s (Maybe (Results a))
+  , _currentBatchId      :: ST s BatchId
   -- ^ Returns an opaque identifier for current batch of jobs, which can be used to either
   -- cancel the batch early or simply check if the batch has finished or not.
-  , _cancelBatch         :: BatchId -> Early a -> m Bool
+  , _cancelBatch         :: BatchId -> Early a -> ST s Bool
   -- ^ Stops current batch and cancells all the outstanding jobs and the ones that are
   -- currently in progress.
-  , _batchEarly          :: m (Maybe (Early a))
+  , _batchEarly          :: ST s (Maybe (Early a))
   }
+
 
 -- | This is a wrapper around `Scheduler`, but it also keeps a separate state for each
 -- individual worker. See `Control.Scheduler.withSchedulerWS` or
 -- `Control.Scheduler.withSchedulerWS_` for ways to construct and use this data type.
 --
 -- @since 1.4.0
-data SchedulerWS s m a = SchedulerWS
-  { _workerStates :: !(WorkerStates s)
-  , _getScheduler :: !(Scheduler m a)
+data SchedulerWS ws a = SchedulerWS
+  { _workerStates :: !(WorkerStates ws)
+  , _getScheduler :: !(Scheduler RealWorld a)
   }
 
 -- | Each worker is capable of keeping it's own state, that can be share for different
@@ -137,10 +138,14 @@ data SchedulerWS s m a = SchedulerWS
 -- `Control.Scheduler.initWorkerStates`
 --
 -- @since 1.4.0
-data WorkerStates s = WorkerStates
+data WorkerStates ws = WorkerStates
   { _workerStatesComp  :: !Comp
-  , _workerStatesArray :: !(SmallArray s)
-  , _workerStatesMutex :: !(IORef Bool)
+  , _workerStatesArray :: !(SmallArray ws)
+#if MIN_VERSION_pvar(1,0,0)
+  , _workerStatesMutex :: !(PVar Int RealWorld)
+#else
+  , _workerStatesMutex :: !(PVar IO Int)
+#endif
   }
 
 -- | This identifier is needed for tracking batches.
@@ -152,10 +157,10 @@ newtype BatchId = BatchId { getBatchId :: Int }
 -- lifetime of a scheduler.
 --
 -- @since 1.5.0
-data Batch m a = Batch
-  { batchCancel :: a -> m Bool
-  , batchCancelWith :: a -> m Bool
-  , batchHasFinished :: m Bool
+data Batch s a = Batch
+  { batchCancel      :: a -> ST s Bool
+  , batchCancelWith  :: a -> ST s Bool
+  , batchHasFinished :: ST s Bool
   }
 
 
@@ -164,10 +169,10 @@ data Batch m a = Batch
 -- `Control.Scheduler.Global.globalScheduler`
 --
 -- @since 1.5.0
-data GlobalScheduler m =
+data GlobalScheduler =
   GlobalScheduler
     { globalSchedulerComp :: !Comp
-    , globalSchedulerMVar :: !(MVar (Scheduler m ()))
+    , globalSchedulerMVar :: !(MVar (Scheduler RealWorld ()))
     , globalSchedulerThreadIdsRef :: !(IORef [ThreadId])
     }
 

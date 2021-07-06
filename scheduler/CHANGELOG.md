@@ -1,3 +1,10 @@
+# 1.6.0
+
+* Switch type parameter of `Scheduler` from monad `m` to state token `s`. Which
+  also means that constraints on many functions got tighter (i.e. `MonadPrim`, `MonadPrimBase`)
+* Remove `m` type parameter for `SchedulerWS`, since it can only work in `IO` like monad anyways.
+* Switch type parameter of `Batch` from monad `m` to state token `s`.
+
 # 1.5.0
 
 Despite that the major part of the version was bumped up, this release does not include

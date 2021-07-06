@@ -1,5 +1,5 @@
 name:                scheduler
-version:             1.5.0
+version:             1.6.0
 synopsis:            Work stealing scheduler.
 description:         A work stealing scheduler that is designed for parallelization of heavy work loads. It was primarily developed for [massiv](https://github.com/lehins/massiv) array library, but it is general enough to be useful for any computation that fits the model of few workers and many jobs.
 homepage:            https://github.com/lehins/haskell-scheduler
@@ -27,10 +27,10 @@ library
                      , deepseq
                      , exceptions
                      , unliftio-core
-                     , primitive      >= 0.6.4
+                     , primitive      >= 0.7.1
                      , pvar           < 2.0
   default-language:    Haskell2010
-  ghc-options:         -Wall
+  ghc-options:         -Wall -Wno-simplifiable-class-constraints
 
 
 test-suite tests
@@ -39,6 +39,7 @@ test-suite tests
   main-is:            Main.hs
   other-modules:      Spec
                     , Control.SchedulerSpec
+  build-tool-depends: hspec-discover:hspec-discover
   build-depends:      base
                     , deepseq
                     , genvalidity-hspec

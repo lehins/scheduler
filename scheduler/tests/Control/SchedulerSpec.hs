@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
 module Control.SchedulerSpec
   ( spec
   ) where
@@ -13,6 +14,7 @@ import qualified Control.Exception as EUnsafe
 import Control.Exception.Base (ArithException(DivideByZero),
                                AsyncException(ThreadKilled))
 import Control.Monad
+import Control.Monad.ST
 import Control.Scheduler as S
 import Data.Bits (complement)
 import qualified Data.Foldable as F (toList, traverse_)
@@ -313,8 +315,8 @@ prop_SameAsTrivialScheduler comp zs f =
 
 prop_Terminate ::
      (Show a, Eq a)
-  => ((Scheduler IO Int -> IO ()) -> IO a)
-  -> (Scheduler IO Int -> Int -> IO Int)
+  => ((Scheduler RealWorld Int -> IO ()) -> IO a)
+  -> (Scheduler RealWorld Int -> Int -> IO Int)
   -> ([Int] -> Int -> a)
   -> [Int]
   -> Int
