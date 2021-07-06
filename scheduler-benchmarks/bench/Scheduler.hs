@@ -5,6 +5,7 @@ module Main where
 import qualified Control.Concurrent.Async as A (mapConcurrently, replicateConcurrently)
 import Control.Monad (replicateM_, replicateM)
 import Control.Monad.Par (IVar, Par, get, newFull_, runParIO)
+import Control.Monad.ST
 import Control.Parallel (par)
 import Control.Scheduler
 import Control.Scheduler.Global
@@ -36,7 +37,7 @@ main = do
                 whnfIO (withGlobalScheduler_ globalScheduler (\_ -> pure ()))
               , bench "Par'" $ whnfIO (withScheduler_ Par' (\_ -> pure ()))
               ]
-          , let schedule :: Scheduler IO () -> IO ()
+          , let schedule :: Scheduler RealWorld () -> IO ()
                 schedule s = replicateM_ k $ scheduleWork_ s (pure ())
              in bgroup
                   ("pure () - " ++ show k)
@@ -46,7 +47,7 @@ main = do
                   , bench "Par (gloabal)" $ whnfIO (withGlobalScheduler_ globalScheduler schedule)
                   , bench "Par'" $ whnfIO (withScheduler_ Par' schedule)
                   ]
-          , let schedule :: Scheduler IO () -> IO ()
+          , let schedule :: Scheduler RealWorld () -> IO ()
                 schedule s = replicateM_ k $ scheduleWork s (pure ())
              in bgroup
                   ("pure [()] - " ++ show k)
