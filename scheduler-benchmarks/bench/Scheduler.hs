@@ -36,7 +36,7 @@ main = do
                 whnfIO (withGlobalScheduler_ globalScheduler (\_ -> pure ()))
               , bench "Par'" $ whnfIO (withScheduler_ Par' (\_ -> pure ()))
               ]
-          , let schedule :: Scheduler () RW -> IO ()
+          , let schedule :: Scheduler RW () -> IO ()
                 schedule s = replicateM_ k $ scheduleWork_ s (pure ())
              in bgroup
                   ("pure () - " ++ show k)
@@ -46,7 +46,7 @@ main = do
                   , bench "Par (global)" $ whnfIO (withGlobalScheduler_ globalScheduler schedule)
                   , bench "Par'" $ whnfIO (withScheduler_ Par' schedule)
                   ]
-          , let schedule :: Scheduler () RW -> IO ()
+          , let schedule :: Scheduler RW () -> IO ()
                 schedule s = replicateM_ k $ scheduleWork s (pure ())
              in bgroup
                   ("pure [()] - " ++ show k)

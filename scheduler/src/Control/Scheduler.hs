@@ -83,14 +83,14 @@ import Data.Traversable
 -- | Get the underlying `Scheduler`, which cannot access `WorkerStates`.
 --
 -- @since 1.4.0
-unwrapSchedulerWS :: SchedulerWS s m a -> Scheduler m a
+unwrapSchedulerWS :: SchedulerWS ws a -> Scheduler RW a
 unwrapSchedulerWS = _getScheduler
 
 
 -- | Get the computation strategy the states where initialized with.
 --
 -- @since 1.4.0
-workerStatesComp :: WorkerStates ws s -> Comp
+workerStatesComp :: WorkerStates ws -> Comp
 workerStatesComp = _workerStatesComp
 
 
@@ -131,14 +131,14 @@ workerStatesComp = _workerStatesComp
 -- except for the doctests to pass.
 --
 -- @since 1.4.0
-withSchedulerWS :: MonadUnliftIO m => WorkerStates ws RW -> (SchedulerWS ws a RW -> m b) -> m [a]
+withSchedulerWS :: UnliftPrimal RW m => WorkerStates ws -> (SchedulerWS ws a -> m b) -> m [a]
 withSchedulerWS = withSchedulerWSInternal withScheduler
 {-# INLINEABLE withSchedulerWS #-}
 
 -- | Run a scheduler with stateful workers, while discarding computation results.
 --
 -- @since 1.4.0
-withSchedulerWS_ :: MonadUnliftIO m => WorkerStates ws RW -> (SchedulerWS ws () RW -> m b) -> m ()
+withSchedulerWS_ :: UnliftPrimal RW m => WorkerStates ws -> (SchedulerWS ws () -> m b) -> m ()
 withSchedulerWS_ = withSchedulerWSInternal withScheduler_
 {-# INLINEABLE withSchedulerWS_ #-}
 
@@ -147,7 +147,7 @@ withSchedulerWS_ = withSchedulerWSInternal withScheduler_
 --
 -- @since 1.4.2
 withSchedulerWSR ::
-     MonadUnliftIO m => WorkerStates ws RW -> (SchedulerWS ws a RW -> m b) -> m (Results a)
+     UnliftPrimal RW m => WorkerStates ws -> (SchedulerWS ws a -> m b) -> m (Results a)
 withSchedulerWSR = withSchedulerWSInternal withSchedulerR
 {-# INLINEABLE withSchedulerWSR #-}
 
@@ -155,17 +155,17 @@ withSchedulerWSR = withSchedulerWSInternal withSchedulerR
 -- | Schedule a job that will get a worker state passed as an argument
 --
 -- @since 1.4.0
-scheduleWorkState :: UnliftPrimal s m => SchedulerWS ws a s -> (ws -> m a) -> m ()
+scheduleWorkState :: UnliftPrimal RW m => SchedulerWS ws a -> (ws -> m a) -> m ()
 scheduleWorkState schedulerS withState =
   withRunInST $ \run ->
     scheduleWorkId (_getScheduler schedulerS) $ \(WorkerId i) ->
       run $ withState (indexSBArray (_workerStatesArray (_workerStates schedulerS)) i)
 {-# INLINEABLE scheduleWorkState #-}
 
--- | Same as `scheduleWorkState`, but dont' keep the result of computation.
+-- | Same as `scheduleWorkState`, but doesn't keep the result of computation.
 --
 -- @since 1.4.0
-scheduleWorkState_ :: UnliftPrimal s m => SchedulerWS ws () s -> (ws -> m ()) -> m ()
+scheduleWorkState_ :: UnliftPrimal RW m => SchedulerWS ws () -> (ws -> m ()) -> m ()
 scheduleWorkState_ schedulerS withState =
   withRunInST $ \run ->
     scheduleWorkId_ (_getScheduler schedulerS) $ \(WorkerId i) ->
@@ -177,7 +177,7 @@ scheduleWorkState_ schedulerS withState =
 -- capabilities you have. Related function is `getCompWorkers`.
 --
 -- @since 1.0.0
-numWorkers :: Scheduler a s -> Int
+numWorkers :: Scheduler s a -> Int
 numWorkers = _numWorkers
 
 
@@ -188,7 +188,7 @@ numWorkers = _numWorkers
 -- scheduler.
 --
 -- @since 1.2.0
-scheduleWorkId :: UnliftPrimal s m => Scheduler a s -> (WorkerId -> m a) -> m ()
+scheduleWorkId :: UnliftPrimal s m => Scheduler s a -> (WorkerId -> m a) -> m ()
 scheduleWorkId scheduler f =
   withRunInST $ \run -> _scheduleWorkId scheduler (run . f)
 {-# INLINEABLE scheduleWorkId #-}
@@ -202,7 +202,7 @@ scheduleWorkId scheduler f =
 -- although it will make sure their results are discarded.
 --
 -- @since 1.1.0
-terminate :: Primal s m => Scheduler a s -> a -> m a
+terminate :: Primal s m => Scheduler s a -> a -> m a
 terminate scheduler a = liftST $ _terminate scheduler (Early a)
 {-# INLINEABLE terminate #-}
 
@@ -216,7 +216,7 @@ terminate scheduler a = liftST $ _terminate scheduler (Early a)
 -- function.
 --
 -- @since 1.1.0
-terminateWith :: Primal s m => Scheduler a s -> a -> m a
+terminateWith :: Primal s m => Scheduler s a -> a -> m a
 terminateWith scheduler a = liftST $ _terminate scheduler (EarlyWith a)
 {-# INLINEABLE terminateWith #-}
 
@@ -224,25 +224,25 @@ terminateWith scheduler a = liftST $ _terminate scheduler (EarlyWith a)
 -- jobs. Similar to `scheduleWorkId`, except the job doesn't get the worker id.
 --
 -- @since 1.0.0
-scheduleWork :: UnliftPrimal s m => Scheduler a s -> m a -> m ()
+scheduleWork :: UnliftPrimal s m => Scheduler s a -> m a -> m ()
 scheduleWork scheduler f =
   withRunInST $ \run -> _scheduleWorkId scheduler (run . const f)
 {-# INLINEABLE scheduleWork #-}
 
 
 -- FIXME: get rid of scheduleJob and decide at `scheduleWork` level if we should use Job or Job_
--- Type here should be `scheduleWork_ :: Scheduler m a -> m () -> m ()
+-- Type here should be `scheduleWork_ :: Scheduler a m -> m () -> m ()
 -- | Same as `scheduleWork`, but only for a `Scheduler` that doesn't keep the results.
 --
 -- @since 1.1.0
-scheduleWork_ :: UnliftPrimal s m => Scheduler () s -> m () -> m ()
+scheduleWork_ :: UnliftPrimal s m => Scheduler s () -> m () -> m ()
 scheduleWork_ = scheduleWork
 {-# INLINE scheduleWork_ #-}
 
 -- | Same as `scheduleWorkId`, but only for a `Scheduler` that doesn't keep the results.
 --
 -- @since 1.2.0
-scheduleWorkId_ :: UnliftPrimal s m => Scheduler () s -> (WorkerId -> m ()) -> m ()
+scheduleWorkId_ :: UnliftPrimal s m => Scheduler s () -> (WorkerId -> m ()) -> m ()
 scheduleWorkId_ scheduler f =
   withRunInST $ \run -> _scheduleWorkId scheduler (run . f)
 {-# INLINEABLE scheduleWorkId_ #-}
@@ -253,7 +253,7 @@ scheduleWorkId_ scheduler f =
 -- To be called within a `withScheduler` block.
 --
 -- @since 1.4.1
-replicateWork :: UnliftPrimal s m => Scheduler a s -> Int -> m a -> m ()
+replicateWork :: UnliftPrimal s m => Scheduler s a -> Int -> m a -> m ()
 replicateWork scheduler !n f = go n
   where
     go !k
@@ -266,16 +266,16 @@ replicateWork scheduler !n f = go n
 -- /Important/ - In case of `Seq` computation strategy this function has no affect.
 --
 -- @since 1.1.0
-terminate_ :: Primal s m => Scheduler () s -> m ()
+terminate_ :: Primal s m => Scheduler s () -> m ()
 terminate_ = liftST . (`_terminate` Early ())
 {-# INLINEABLE terminate_ #-}
 
 
 -- | This trivial scheduler will behave in the same way as `withScheduler` with `Seq`
--- computation strategy, except it is restricted to `PrimMonad`, instead of `MonadUnliftIO`.
+-- computation strategy, except it is restricted to `Primal`, instead of `UnliftPrimal`.
 --
 -- @since 1.4.2
-withTrivialScheduler :: Primal s m => (Scheduler a s -> m b) -> m [a]
+withTrivialScheduler :: Primal s m => (Scheduler s a -> m b) -> m [a]
 withTrivialScheduler action = F.toList <$> withTrivialSchedulerR action
 {-# INLINEABLE withTrivialScheduler #-}
 
@@ -285,7 +285,7 @@ withTrivialScheduler action = F.toList <$> withTrivialSchedulerR action
 -- strategy.
 --
 -- @since 1.0.0
-traverseConcurrently :: (MonadUnliftIO m, Traversable t) => Comp -> (a -> m b) -> t a -> m (t b)
+traverseConcurrently :: (UnliftPrimal RW m, Traversable t) => Comp -> (a -> m b) -> t a -> m (t b)
 traverseConcurrently comp f xs = do
   ys <- withScheduler comp $ \s -> traverse_ (scheduleWork s . f) xs
   pure $ transList ys xs
@@ -302,7 +302,7 @@ transList xs' = snd . mapAccumL withR xs'
 -- computation.
 --
 -- @since 1.0.0
-traverseConcurrently_ :: (MonadUnliftIO m, Foldable t) => Comp -> (a -> m b) -> t a -> m ()
+traverseConcurrently_ :: (UnliftPrimal RW m, Foldable t) => Comp -> (a -> m b) -> t a -> m ()
 traverseConcurrently_ comp f xs =
   withScheduler_ comp $ \s -> scheduleWork s $ F.traverse_ (scheduleWork s . void . f) xs
 {-# INLINEABLE traverseConcurrently_ #-}
@@ -311,7 +311,7 @@ traverseConcurrently_ comp f xs =
 -- strategy.
 --
 -- @since 1.1.0
-replicateConcurrently :: MonadUnliftIO m => Comp -> Int -> m a -> m [a]
+replicateConcurrently :: UnliftPrimal RW m => Comp -> Int -> m a -> m [a]
 replicateConcurrently comp n f =
   withScheduler comp $ \s -> replicateM_ n $ scheduleWork s f
 {-# INLINEABLE replicateConcurrently #-}
@@ -319,7 +319,7 @@ replicateConcurrently comp n f =
 -- | Just like `replicateConcurrently`, but discards the results of computation.
 --
 -- @since 1.1.0
-replicateConcurrently_ :: MonadUnliftIO m => Comp -> Int -> m a -> m ()
+replicateConcurrently_ :: UnliftPrimal RW m => Comp -> Int -> m a -> m ()
 replicateConcurrently_ comp n f =
   withScheduler_ comp $ \s -> scheduleWork s $ replicateM_ n (scheduleWork s $ void f)
 {-# INLINEABLE replicateConcurrently_ #-}
@@ -356,9 +356,9 @@ replicateConcurrently_ comp n f =
 --
 -- @since 1.0.0
 withScheduler ::
-     MonadUnliftIO m
+     UnliftPrimal RW m
   => Comp -- ^ Computation strategy
-  -> (Scheduler a RW -> m b)
+  -> (Scheduler RW a -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m [a]
 withScheduler Seq = fmap (reverse . resultsToList) . withTrivialSchedulerRIO
@@ -371,9 +371,9 @@ withScheduler comp =
 --
 -- @since 1.4.2
 withSchedulerR ::
-     MonadUnliftIO m
+     UnliftPrimal RW m
   => Comp -- ^ Computation strategy
-  -> (Scheduler a RW -> m b)
+  -> (Scheduler RW a -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m (Results a)
 withSchedulerR Seq = fmap reverseResults . withTrivialSchedulerRIO
@@ -385,9 +385,9 @@ withSchedulerR comp = fmap reverseResults . withSchedulerInternal comp scheduleJ
 --
 -- @since 1.0.0
 withScheduler_ ::
-     MonadUnliftIO m
+     UnliftPrimal RW m
   => Comp -- ^ Computation strategy
-  -> (Scheduler a RW -> m b)
+  -> (Scheduler RW a -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m ()
 withScheduler_ Seq = void . withTrivialSchedulerRIO
@@ -399,7 +399,7 @@ withScheduler_ comp = void . withSchedulerInternal comp scheduleJobs_ (const (pu
 -- | Check if the supplied batch has already finished.
 --
 -- @since 1.5.0
-hasBatchFinished :: Primal s m => Batch a s -> m Bool
+hasBatchFinished :: Primal s m => Batch s a -> m Bool
 hasBatchFinished = liftST . batchHasFinished
 {-# INLINE hasBatchFinished #-}
 
@@ -412,21 +412,21 @@ hasBatchFinished = liftST . batchHasFinished
 -- concurrent cancelation and it will return `True`.
 --
 -- @since 1.5.0
-cancelBatch :: Primal s m => Batch a s -> a -> m Bool
+cancelBatch :: Primal s m => Batch s a -> a -> m Bool
 cancelBatch batch a = liftST $ batchCancel batch a
 {-# INLINE cancelBatch #-}
 
 -- | Same as `cancelBatch`, but only works with schedulers that don't care about results
 --
 -- @since 1.5.0
-cancelBatch_ :: Primal s m => Batch () s -> m Bool
+cancelBatch_ :: Primal s m => Batch s () -> m Bool
 cancelBatch_ batch = liftST $ batchCancel batch ()
 {-# INLINE cancelBatch_ #-}
 
 -- | Same as `cancelBatch_`, but the result of computation will be set to `FinishedEarlyWith`
 --
 -- @since 1.5.0
-cancelBatchWith :: Primal s m => Batch a s -> a -> m Bool
+cancelBatchWith :: Primal s m => Batch s a -> a -> m Bool
 cancelBatchWith batch a = liftST $ batchCancelWith batch a
 {-# INLINE cancelBatchWith #-}
 
@@ -435,7 +435,7 @@ cancelBatchWith batch a = liftST $ batchCancelWith batch a
 --
 -- @since 1.5.0
 getCurrentBatch ::
-     Primal s m => Scheduler a s -> m (Batch a s)
+     Primal s m => Scheduler s a -> m (Batch s a)
 getCurrentBatch scheduler = liftST $ do
   batchId <- _currentBatchId scheduler
   pure $ Batch
@@ -461,7 +461,7 @@ getCurrentBatch scheduler = liftST $ do
 --
 -- @since 1.5.0
 runBatch ::
-     UnliftPrimal s m => Scheduler a s -> (Batch a s -> m c) -> m [a]
+     UnliftPrimal s m => Scheduler s a -> (Batch s a -> m c) -> m [a]
 runBatch scheduler f = withRunInST $ \run -> do
   _ <- run . f =<< getCurrentBatch scheduler
   reverse . resultsToList <$> _waitForCurrentBatch scheduler
@@ -471,7 +471,7 @@ runBatch scheduler f = withRunInST $ \run -> do
 --
 -- @since 1.5.0
 runBatch_ ::
-     UnliftPrimal s m => Scheduler () s -> (Batch () s -> m c) -> m ()
+     UnliftPrimal s m => Scheduler s () -> (Batch s () -> m c) -> m ()
 runBatch_ scheduler f = withRunInST $ \run -> do
   _ <- run . f =<< getCurrentBatch scheduler
   void (_waitForCurrentBatch scheduler)
@@ -482,7 +482,7 @@ runBatch_ scheduler f = withRunInST $ \run -> do
 --
 -- @since 1.5.0
 runBatchR ::
-     UnliftPrimal s m => Scheduler a s -> (Batch a s -> m c) -> m (Results a)
+     UnliftPrimal s m => Scheduler s a -> (Batch s a -> m c) -> m (Results a)
 runBatchR scheduler f = withRunInST $ \run -> do
   _ <- run . f =<< getCurrentBatch scheduler
   reverseResults <$> _waitForCurrentBatch scheduler

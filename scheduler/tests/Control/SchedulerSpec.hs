@@ -310,8 +310,8 @@ prop_SameAsTrivialScheduler comp zs f =
 
 prop_Terminate ::
      (Show a, Eq a)
-  => ((Scheduler Int RW -> IO ()) -> IO a)
-  -> (Scheduler Int RW -> Int -> IO Int)
+  => ((Scheduler RW Int -> IO ()) -> IO a)
+  -> (Scheduler RW Int -> Int -> IO Int)
   -> ([Int] -> Int -> a)
   -> [Int]
   -> Int

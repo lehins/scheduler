@@ -29,12 +29,12 @@ import Primal.Ref
 
 -- | Global scheduler with `Par` computation strategy that can be used anytime using
 -- `withGlobalScheduler_`
-globalScheduler :: GlobalScheduler RW
+globalScheduler :: GlobalScheduler
 globalScheduler = unsafePerformIO (newGlobalScheduler Par)
 {-# NOINLINE globalScheduler #-}
 
 
-initGlobalScheduler :: Comp -> (Scheduler a RW -> [ThreadId] -> ST RW b) -> ST RW b
+initGlobalScheduler :: Comp -> (Scheduler RW a -> [ThreadId] -> ST RW b) -> ST RW b
 initGlobalScheduler comp action = do
   (jobs, mkScheduler) <- initScheduler comp scheduleJobs_ (const (pure []))
   bracketOnError (spawnWorkers jobs comp) terminateWorkers $ \tids ->
@@ -46,7 +46,7 @@ initGlobalScheduler comp action = do
 -- degrate performance, therefore it is best not to use more than one scheduler at a time.
 --
 -- @since 1.5.0
-newGlobalScheduler :: MonadIO m => Comp -> m (GlobalScheduler RW)
+newGlobalScheduler :: Primal RW m => Comp -> m GlobalScheduler
 newGlobalScheduler comp =
   liftST $ initGlobalScheduler comp $ \scheduler tids -> do
     mvar <- newMVar scheduler
@@ -64,7 +64,7 @@ newGlobalScheduler comp =
 -- used concurrently other schedulers might get created.
 --
 -- @since 1.5.0
-withGlobalScheduler_ :: MonadUnliftIO m => GlobalScheduler RW -> (Scheduler () RW -> m a) -> m ()
+withGlobalScheduler_ :: UnliftPrimal RW m => GlobalScheduler -> (Scheduler RW () -> m a) -> m ()
 withGlobalScheduler_ GlobalScheduler {..} action =
   withRunInST $ \run -> do
     let initializeNewScheduler = do

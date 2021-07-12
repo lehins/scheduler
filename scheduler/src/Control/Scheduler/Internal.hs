@@ -48,7 +48,7 @@ import Primal.Ref
 -- | Initialize a separate state for each worker.
 --
 -- @since 1.4.0
-initWorkerStates :: Primal s m => Comp -> (WorkerId -> m ws) -> m (WorkerStates ws s)
+initWorkerStates :: Primal RW m => Comp -> (WorkerId -> m ws) -> m (WorkerStates ws)
 initWorkerStates comp initState = do
   let nWorkers = compNumWorkers comp
   arr <- newRawSBMArray $ Size nWorkers
@@ -65,10 +65,10 @@ initWorkerStates comp initState = do
       {_workerStatesComp = comp, _workerStatesArray = workerStates, _workerStatesMutex = mutex}
 
 withSchedulerWSInternal ::
-     MonadUnliftIO m
-  => (Comp -> (Scheduler a RW -> t) -> m b)
-  -> WorkerStates ws RW
-  -> (SchedulerWS ws a RW -> t)
+     UnliftPrimal RW m
+  => (Comp -> (Scheduler RW a -> t) -> m b)
+  -> WorkerStates ws
+  -> (SchedulerWS ws a -> t)
   -> m b
 withSchedulerWSInternal withScheduler' states action = bracket lockState unlockState runSchedulerWS
   where
@@ -88,7 +88,7 @@ withSchedulerWSInternal withScheduler' states action = bracket lockState unlockS
 -- requests are bluntly ignored.
 --
 -- @since 1.1.0
-trivialScheduler_ :: Scheduler () s
+trivialScheduler_ :: Scheduler s ()
 trivialScheduler_ =
   Scheduler
     { _numWorkers = 1
@@ -108,7 +108,7 @@ trivialScheduler_ =
 -- rather computed immediately.
 --
 -- @since 1.4.2
-withTrivialSchedulerR :: Primal s m => (Scheduler a s -> m b) -> m (Results a)
+withTrivialSchedulerR :: Primal s m => (Scheduler s a -> m b) -> m (Results a)
 withTrivialSchedulerR action = do
   resRef <- newBRef []
   batchRef <- newURef $ BatchId 0
@@ -160,7 +160,7 @@ withTrivialSchedulerR action = do
 -- returns results in an original LIFO order.
 --
 -- @since 1.4.2
-withTrivialSchedulerRIO :: MonadUnliftIO m => (Scheduler a RW -> m b) -> m (Results a)
+withTrivialSchedulerRIO :: UnliftPrimal RW m => (Scheduler RW a -> m b) -> m (Results a)
 withTrivialSchedulerRIO action = withRunInST $ \ run -> do
   resRef <- newBRef []
   batchRef <- newURef $ BatchId 0
@@ -216,18 +216,18 @@ traverse_ :: (Applicative f, Foldable t) => (a -> f ()) -> t a -> f ()
 traverse_ f = F.foldl' (\c a -> c *> f a) (pure ())
 {-# INLINE traverse_ #-}
 
-scheduleJobs :: Jobs a s -> (WorkerId -> ST s a) -> ST s ()
+scheduleJobs :: Jobs s a -> (WorkerId -> ST s a) -> ST s ()
 scheduleJobs = scheduleJobsWith mkJob
 {-# INLINEABLE scheduleJobs #-}
 
 -- | Ignores the result of computation, thus avoiding some overhead.
-scheduleJobs_ :: Jobs a s -> (WorkerId -> ST s b) -> ST s ()
+scheduleJobs_ :: Jobs s a -> (WorkerId -> ST s b) -> ST s ()
 scheduleJobs_ = scheduleJobsWith (\job -> pure (Job_ (void . job (\_ -> pure ()))))
 {-# INLINEABLE scheduleJobs_ #-}
 
 scheduleJobsWith ::
-     (((b -> ST s ()) -> WorkerId -> ST s ()) -> ST s (Job a s))
-  -> Jobs a s
+     (((b -> ST s ()) -> WorkerId -> ST s ()) -> ST s (Job s a))
+  -> Jobs s a
   -> (WorkerId -> ST s b)
   -> ST s ()
 scheduleJobsWith mkJob' Jobs {..} action = do
@@ -245,7 +245,7 @@ scheduleJobsWith mkJob' Jobs {..} action = do
 runWorker ::
      (forall c. ST RW c -> ST RW c)
   -> WorkerId
-  -> Jobs a RW
+  -> Jobs RW a
   -> ST RW ()
 runWorker unmask wId Jobs {jobsQueue, jobsQueueCount, jobsSchedulerStatus} = go
   where
@@ -282,9 +282,9 @@ runWorker unmask wId Jobs {jobsQueue, jobsQueueCount, jobsSchedulerStatus} = go
 
 initScheduler ::
      Comp
-  -> (Jobs a RW -> (WorkerId -> ST RW a) -> ST RW ())
-  -> (JQueue a RW -> ST RW [a])
-  -> ST RW (Jobs a RW, [ThreadId] -> Scheduler a RW)
+  -> (Jobs RW a-> (WorkerId -> ST RW a) -> ST RW ())
+  -> (JQueue RW a -> ST RW [a])
+  -> ST RW (Jobs RW a, [ThreadId] -> Scheduler RW a)
 initScheduler comp submitWork collect = do
   let jobsNumWorkers = compNumWorkers comp
   jobsQueue <- newJQueue
@@ -355,11 +355,11 @@ initScheduler comp submitWork collect = do
 {-# INLINEABLE initScheduler #-}
 
 withSchedulerInternal ::
-     MonadUnliftIO m
+     UnliftPrimal RW m
   => Comp -- ^ Computation strategy
-  -> (Jobs a RW -> (WorkerId -> ST RW a) -> ST RW ()) -- ^ How to schedule work
-  -> (JQueue a RW -> ST RW [a]) -- ^ How to collect results
-  -> (Scheduler a RW -> m b)
+  -> (Jobs RW a -> (WorkerId -> ST RW a) -> ST RW ()) -- ^ How to schedule work
+  -> (JQueue RW a -> ST RW [a]) -- ^ How to collect results
+  -> (Scheduler RW a -> m b)
      -- ^ Action that will be scheduling all the work.
   -> m (Results a)
 withSchedulerInternal comp submitWork collect onScheduler = do
@@ -407,7 +407,7 @@ collectResults mEarly collect =
 {-# INLINEABLE collectResults #-}
 
 
-spawnWorkers :: forall a. Jobs a RW -> Comp -> ST RW [ThreadId]
+spawnWorkers :: forall a. Jobs RW a -> Comp -> ST RW [ThreadId]
 spawnWorkers jobs@Jobs {jobsNumWorkers} =
   \case
     Par      -> spawnWorkersWith forkOn [1 .. jobsNumWorkers]

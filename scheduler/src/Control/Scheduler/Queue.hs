@@ -33,9 +33,9 @@ import Primal.Ref
 
 -- | A blocking unbounded queue that keeps the jobs in FIFO order and the results Refs
 -- in reversed
-data Queue a s = Queue
-  { qQueue   :: ![Job a s]
-  , qStack   :: ![Job a s]
+data Queue s a = Queue
+  { qQueue   :: ![Job s a]
+  , qStack   :: ![Job s a]
   , qResults :: ![BRef (Maybe a) s]
   , qBaton   :: {-# UNPACK #-}!(MVar () s)
   }
@@ -51,7 +51,7 @@ newtype WorkerId = WorkerId
   } deriving (Show, Read, Eq, Ord, Enum, Bounded, Num, Real, Integral)
 
 
-popQueue :: Queue a s -> Maybe (Job a s, Queue a s)
+popQueue :: Queue s a -> Maybe (Job s a, Queue s a)
 popQueue queue =
   case qQueue queue of
     x:xs -> Just (x, queue {qQueue = xs})
@@ -61,24 +61,24 @@ popQueue queue =
         y:ys -> Just (y, queue {qQueue = ys, qStack = []})
 {-# INLINEABLE popQueue #-}
 
-data Job a s
+data Job s a
   = Job {-# UNPACK #-} !(BRef (Maybe a) s) (WorkerId -> ST s ())
   | Job_ (WorkerId -> ST s ())
 
 
-mkJob :: ((a -> ST s ()) -> WorkerId -> ST s ()) -> ST s (Job a s)
+mkJob :: ((a -> ST s ()) -> WorkerId -> ST s ()) -> ST s (Job s a)
 mkJob action = do
   resRef <- newBRef Nothing
   return $ Job resRef (action (writeBRef resRef . Just))
 {-# INLINEABLE mkJob #-}
 
-data JQueue a s =
+data JQueue s a =
   JQueue
-    { jqQueueRef :: {-# UNPACK #-}!(BRef (Queue a s) s)
+    { jqQueueRef :: {-# UNPACK #-}!(BRef (Queue s a) s)
     , jqLock     :: {-# UNPACK #-}!(MVar () s)
     }
 
-newJQueue :: ST s (JQueue a s)
+newJQueue :: ST s (JQueue s a)
 newJQueue = do
   newLock <- newEmptyMVar
   newBaton <- newEmptyMVar
@@ -86,7 +86,7 @@ newJQueue = do
   return $ JQueue queueRef newLock
 
 -- | Pushes an item onto a queue and returns the previous count.
-pushJQueue :: JQueue a s -> Job a s -> ST s ()
+pushJQueue :: JQueue s a -> Job s a -> ST s ()
 pushJQueue (JQueue jQueueRef _) job = do
   newBaton <- newEmptyMVar
   join $
@@ -104,7 +104,7 @@ pushJQueue (JQueue jQueueRef _) job = do
 
 -- | Pops an item from the queue. The job returns the total job counts that is still left
 -- in the queue
-popJQueue :: JQueue a s -> ST s (WorkerId -> ST s ())
+popJQueue :: JQueue s a -> ST s (WorkerId -> ST s ())
 popJQueue (JQueue jQueueRef lock) = inner
   where
     inner = do
@@ -120,17 +120,17 @@ popJQueue (JQueue jQueueRef lock) = inner
                   Job_ action_ -> return action_)
 {-# INLINEABLE popJQueue #-}
 
-unblockPopJQueue :: JQueue a s -> ST s ()
+unblockPopJQueue :: JQueue s a -> ST s ()
 unblockPopJQueue (JQueue _ lock) = putMVar lock ()
 {-# INLINEABLE unblockPopJQueue #-}
 
-blockPopJQueue :: JQueue a s -> ST s ()
+blockPopJQueue :: JQueue s a -> ST s ()
 blockPopJQueue (JQueue _ lock) = takeMVar lock
 {-# INLINEABLE blockPopJQueue #-}
 
 -- | Clears any jobs that haven't been started yet. Returns the number of jobs that are
 -- still in progress and have not been yet been completed.
-clearPendingJQueue :: JQueue a s -> ST s ()
+clearPendingJQueue :: JQueue s a -> ST s ()
 clearPendingJQueue (JQueue queueRef _) =
   atomicModifyBRef_ queueRef $ \queue -> (queue {qQueue = [], qStack = []})
 {-# INLINEABLE clearPendingJQueue #-}
@@ -138,7 +138,7 @@ clearPendingJQueue (JQueue queueRef _) =
 
 -- | Extracts all results available up to now, the uncomputed ones are discarded. This
 -- also has an affect of resetting the total job count to zero.
-readResults :: JQueue a s -> ST s [a]
+readResults :: JQueue s a -> ST s [a]
 readResults (JQueue jQueueRef _) = do
   results <-
     atomicModifyBRef jQueueRef $ \queue ->

@@ -40,6 +40,7 @@ import Primal.Monad
 import Primal.Ref
 import Primal.Unbox
 import Primal.Unbox.Class
+import Data.Functor.Contravariant
 
 -- | Computed results of scheduled jobs.
 --
@@ -81,9 +82,9 @@ instance Traversable Results where
       FinishedEarly xs x  -> FinishedEarly <$> traverse f xs <*> f x
       FinishedEarlyWith x -> FinishedEarlyWith <$> f x
 
-data Jobs a s = Jobs
+data Jobs s a = Jobs
   { jobsNumWorkers      :: {-# UNPACK #-} !Int
-  , jobsQueue           :: !(JQueue a s)
+  , jobsQueue           :: !(JQueue s a)
   , jobsQueueCount      :: !(URef Int s)
   , jobsSchedulerStatus :: !(MVar SchedulerStatus s)
   }
@@ -105,7 +106,7 @@ unEarly (EarlyWith r) = r
 -- `Control.Scheduler.withScheduler_` for ways to construct and use this data type.
 --
 -- @since 1.0.0
-data Scheduler a s = Scheduler
+data Scheduler s a = Scheduler
   { _numWorkers          :: {-# UNPACK #-} !Int
   , _scheduleWorkId      :: (WorkerId -> ST s a) -> ST s ()
   , _terminate           :: Early a -> ST s a
@@ -125,9 +126,9 @@ data Scheduler a s = Scheduler
 -- `Control.Scheduler.withSchedulerWS_` for ways to construct and use this data type.
 --
 -- @since 1.4.0
-data SchedulerWS ws a s = SchedulerWS
-  { _workerStates :: !(WorkerStates ws s)
-  , _getScheduler :: !(Scheduler a s)
+data SchedulerWS ws a = SchedulerWS
+  { _workerStates :: !(WorkerStates ws)
+  , _getScheduler :: !(Scheduler RW a)
   }
 
 -- | Each worker is capable of keeping it's own state, that can be share for different
@@ -136,10 +137,10 @@ data SchedulerWS ws a s = SchedulerWS
 -- `Control.Scheduler.initWorkerStates`
 --
 -- @since 1.4.0
-data WorkerStates ws s = WorkerStates
+data WorkerStates ws = WorkerStates
   { _workerStatesComp  :: !Comp
   , _workerStatesArray :: !(SBArray ws)
-  , _workerStatesMutex :: !(URef Bool s)
+  , _workerStatesMutex :: !(URef Bool RW)
   }
 
 -- | This identifier is needed for tracking batches.
@@ -156,21 +157,29 @@ instance AtomicCount BatchId
 -- lifetime of a scheduler.
 --
 -- @since 1.5.0
-data Batch a s = Batch
+data Batch s a = Batch
   { batchCancel      :: a -> ST s Bool
   , batchCancelWith  :: a -> ST s Bool
   , batchHasFinished :: ST s Bool
   }
+
+instance Contravariant (Batch s) where
+  contramap f b =
+    Batch
+      { batchCancel = batchCancel b . f
+      , batchCancelWith = batchCancelWith b . f
+      , batchHasFinished = batchHasFinished b
+      }
 
 -- | A thread safe wrapper around `Scheduler`, which allows it to be reused indefinitely
 -- and globally if need be. There is one already created in this library:
 -- `Control.Scheduler.Global.globalScheduler`
 --
 -- @since 1.5.0
-data GlobalScheduler m =
+data GlobalScheduler =
   GlobalScheduler
     { globalSchedulerComp         :: !Comp
-    , globalSchedulerMVar         :: !(MVar (Scheduler () RW) RW)
+    , globalSchedulerMVar         :: !(MVar (Scheduler RW ()) RW)
     , globalSchedulerThreadIdsRef :: !(BRef [ThreadId] RW)
     }
 
