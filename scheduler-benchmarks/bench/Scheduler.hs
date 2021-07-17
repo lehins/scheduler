@@ -95,7 +95,7 @@ mkBenchReplicate ::
   -> Benchmark
 mkBenchReplicate _taskGroup name n x fxIO fxPar =
   bgroup
-    ("replicate/" <> name <> str)
+    ("replicate/" ++ name ++ str)
     [ bench "scheduler/replicateConcurrently" $
       nfIO $ replicateConcurrently Par n (newIORef x >>= fxIO)
     , bench "scheduler/replicateConcurrently_" $
@@ -125,7 +125,7 @@ mkBenchMap ::
   -> Benchmark
 mkBenchMap taskGroup name n fxIO fxParIO fxPar =
   bgroup
-    ("map/" <> name <> str)
+    ("map/" ++ name ++ str)
     [ bench "scheduler/traverseConcurrently" $ nfIO $ traverseConcurrently Par fxIO [1 .. n]
     , bench "unliftio/pooledMapConcurrently" $ nfIO $ pooledMapConcurrently fxIO [1 .. n]
     , bench "streamly/mapM" $ nfIO $ S.drain $ asyncly $ S.mapM fxIO $ S.enumerateFromTo 1 n

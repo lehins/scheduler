@@ -5,9 +5,9 @@ This is a work stealing scheduler, which is very useful for tasks parallelizatio
 Whenever you have many actions you'd like to perform in parallel, but would only like to use a few
 threads to do the actual computation, this package is for you.
 
-| Language | Travis | Azure | Coveralls |
-|:--------:|:------:|:-----:|:---------:|
-| ![GitHub top language](https://img.shields.io/github/languages/top/lehins/haskell-scheduler.svg) | [![Travis](https://img.shields.io/travis/lehins/haskell-scheduler/master.svg?label=Linux%20%26%20OS%20X)](https://travis-ci.org/lehins/haskell-scheduler) | [![Build Status](https://dev.azure.com/kuleshevich/haskell-scheduler/_apis/build/status/lehins.haskell-scheduler?branchName=master)](https://dev.azure.com/kuleshevich/haskell-scheduler/_build?branchName=master) | [![Coverage Status](https://coveralls.io/repos/github/lehins/haskell-scheduler/badge.svg?branch=master)](https://coveralls.io/github/lehins/haskell-scheduler?branch=master) |
+| Language | Github Actions | Coveralls |Gitter.im |
+|:--------:|:--------------:|:---------:|:--------:|
+| ![GitHub top language](https://img.shields.io/github/languages/top/lehins/haskell-scheduler.svg) | [![Build Status](https://github.com/lehins/haskell-scheduler/workflows/scheduler-CI/badge.svg)](https://github.com/lehins/haskell-scheduler/actions) | [![Coverage Status](https://coveralls.io/repos/github/lehins/haskell-scheduler/badge.svg?branch=master)](https://coveralls.io/github/lehins/haskell-scheduler?branch=master) | [![Join the chat at https://gitter.im/haskell-massiv/Lobby](https://badges.gitter.im/haskell-massiv/Lobby.svg)](https://gitter.im/haskell-massiv/Lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 | Gihub | Hackage | Nightly | LTS |
 |:------|:-------:|:-------:|:---:|
