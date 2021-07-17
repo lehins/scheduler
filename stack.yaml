@@ -8,7 +8,7 @@ extra-deps:
 - async-pool-0.9.1@sha256:4015140f896c3f1652b06a679b0ade2717d05557970c283ea2c372a71be2a6a1,1605
 #- ../primal/primal
 - github: lehins/primal
-  commit: 3ab38a379071e46d79d9ef1377a171b66a1388f6
+  commit: 77f52a6603ad0b64141e57e5647d452dca9e25e4
   subdirs:
     - primal
 # - github: lehins/pvar

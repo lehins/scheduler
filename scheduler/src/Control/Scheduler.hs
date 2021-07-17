@@ -59,6 +59,7 @@ module Control.Scheduler
   -- * Computation strategies
   , Comp(..)
   , compNumWorkers
+  , getCompWorkers
   -- * Useful functions
   , replicateConcurrently
   , replicateConcurrently_

@@ -12,7 +12,7 @@
 -- Portability : non-portable
 --
 module Control.Scheduler.Computation
-  ( Comp(.., Par, Par'), compNumWorkers
+  ( Comp(.., Par, Par'), compNumWorkers, getCompWorkers
   ) where
 
 import Primal.Eval (NFData(..), deepseq)
@@ -115,3 +115,8 @@ compNumWorkers =
     ParOn ws -> length ws
     Par'     -> numCaps
     ParN n   -> fromIntegral n
+
+
+getCompWorkers :: Monad m => Comp -> m Int
+getCompWorkers = pure . compNumWorkers
+{-# DEPRCATED getCompWorkers "In favor of pure `compNumWorkers`" #-}
