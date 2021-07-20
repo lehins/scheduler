@@ -1,4 +1,4 @@
-# 1.6.0
+# 2.0.0
 
 * Switch type parameter of `Scheduler` from monad `m` to state token `s`. Which
   also means that constraints on many functions got tighter (i.e. `MonadPrim`, `MonadPrimBase`)

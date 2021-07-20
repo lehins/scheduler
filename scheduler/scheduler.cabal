@@ -1,5 +1,5 @@
 name:                scheduler
-version:             1.6.0
+version:             2.0.0
 synopsis:            Work stealing scheduler.
 description:         A work stealing scheduler that is designed for parallelization of heavy work loads. It was primarily developed for [massiv](https://github.com/lehins/massiv) array library, but it is general enough to be useful for any computation that fits the model of few workers and many jobs.
 homepage:            https://github.com/lehins/haskell-scheduler
