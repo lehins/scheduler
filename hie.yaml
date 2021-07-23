@@ -1,0 +1,11 @@
+cradle:
+  stack:
+    components:
+      - path: "./scheduler/src"
+        component: "scheduler:lib"
+      - path: "./scheduler/tests"
+        component: "scheduler-test:test:tests"
+      - path: "./scheduler-bench/src"
+        component: "scheduler-benchmarks:lib"
+      - path: "./scheduler-benchmarks/"
+        component: "scheduler-benchmarks:bench:scheduler"
