@@ -4,6 +4,8 @@
   also means that constraints on many functions got tighter (i.e. `MonadPrim`, `MonadPrimBase`)
 * Remove `m` type parameter for `SchedulerWS`, since it can only work in `IO` like monad anyways.
 * Switch type parameter of `Batch` from monad `m` to state token `s`.
+* Swap order of arguments for `replicateWork` for consistency
+* Add `replicateWork_` that is slightly more efficient than `replicateWork`
 
 # 1.5.0
 

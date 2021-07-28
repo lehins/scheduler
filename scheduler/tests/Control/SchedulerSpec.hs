@@ -43,7 +43,7 @@ concurrentProperty = within 2000000
 concurrentExpectation :: Expectation -> Property
 concurrentExpectation = concurrentProperty
 
-concurrentPropertyIO :: IO Property -> Property
+concurrentPropertyIO :: Testable prop => IO prop -> Property
 concurrentPropertyIO = concurrentProperty . monadicIO . run
 
 instance Arbitrary Comp where
@@ -56,6 +56,12 @@ instance Arbitrary NonSeq where
   arbitrary =
     NonSeq <$>
     frequency [(10, pure Par), (35, ParOn <$> arbitrary), (35, ParN . getSmall <$> arbitrary)]
+
+newtype SeqLike = SeqLike {getSeqLike :: Comp }
+  deriving (Show, Eq)
+
+instance Arbitrary SeqLike where
+  arbitrary = SeqLike <$> oneof [pure Seq, ParOn . pure <$> arbitrary, pure $ ParN 1]
 
 prop_SameList :: Comp -> [Int] -> Property
 prop_SameList comp xs =
@@ -109,20 +115,35 @@ prop_Traverse comp xs f =
   where
     f' = pure . apply f
 
-replicateSeq :: (Int -> IO Int -> IO [Int]) -> Int -> Fun Int Int -> Property
-replicateSeq justAs n f =
-  concurrentPropertyIO $ do
-    iRef <- newIORef 0
-    jRef <- newIORef 0
-    let g ref = atomicModifyIORef' ref (\i -> (apply f i, i + 1))
-    (===) <$> S.replicateConcurrently Seq n (g jRef) <*> justAs n (g iRef)
+replicateLike :: ([Word] -> [Word]) -> (Int -> IO Word -> IO [Word]) -> Int -> Fun Word Word -> IO ()
+replicateLike adjust justAs n f = do
+  iRef <- newIORef 0
+  jRef <- newIORef 0
+  let g ref = atomicModifyIORef' ref (\i -> (apply f i, i + 1))
+  xs <- replicateM n (g jRef)
+  ys <- justAs n (g iRef)
+  adjust ys `shouldBe` adjust xs
 
-prop_ReplicateM :: Int -> Fun Int Int -> Property
-prop_ReplicateM i = concurrentProperty . replicateSeq replicateM i
+prop_ReplicateM :: ([Word] -> [Word]) -> Comp -> Int -> Fun Word Word -> Property
+prop_ReplicateM adjust comp i =
+  concurrentPropertyIO . replicateLike adjust (S.replicateConcurrently comp) i
 
-prop_ReplicateWorkSeq :: Int -> Fun Int Int -> Property
-prop_ReplicateWorkSeq i =
-  concurrentProperty . replicateSeq (\ n g -> withScheduler Seq (\s -> replicateWork n s g)) i
+prop_ReplicateWork :: ([Word] -> [Word]) -> Comp -> Int -> Fun Word Word -> Property
+prop_ReplicateWork adjust comp i =
+  concurrentPropertyIO .
+  replicateLike adjust (\n g -> withScheduler comp (\s -> replicateWork s n g)) i
+
+prop_ReplicateWork_ :: ([Word] -> [Word]) -> Comp -> Int -> Fun Word Word -> Property
+prop_ReplicateWork_ adjust comp i =
+  concurrentPropertyIO . replicateLike adjust scheduleAndCollect i
+  where
+    scheduleAndCollect n g = do
+      ref <- newIORef []
+      withScheduler_ comp $ \s ->
+        replicateWork_ s n $ do
+          x <- g
+          atomicModifyIORef' ref (\xs -> (x : xs, ()))
+      reverse <$> readIORef ref
 
 
 prop_ManyJobsInChunks :: Property
@@ -288,15 +309,15 @@ prop_FinishWithBeforeStarting comp n =
         scheduleWork scheduler $ pure (complement n)
     pure (res === [n])
 
-prop_TrivialSchedulerSameAsSeq_ :: [Int] -> Property
-prop_TrivialSchedulerSameAsSeq_ zs =
+prop_TrivialSchedulerSameAsSeq_ :: SeqLike -> [Int] -> Property
+prop_TrivialSchedulerSameAsSeq_ (SeqLike comp) zs =
   concurrentPropertyIO $ do
     let consRef xsRef x = atomicModifyIORef' xsRef $ \ xs -> (x:xs, ())
         trivial = trivialScheduler_
     nRef <- newIORef False
     xRefs <- newIORef []
     yRefs <- newIORef []
-    withScheduler_ Seq $ \scheduler -> do
+    withScheduler_ comp $ \scheduler -> do
       writeIORef nRef (numWorkers scheduler == numWorkers trivial)
       mapM_ (scheduleWork_ scheduler . consRef xRefs) zs
     mapM_ (scheduleWork_ trivial . consRef yRefs) zs
@@ -550,8 +571,9 @@ spec = do
     prop "Nested" $ prop_Nested Seq
     prop "Serially" $ prop_Serially Seq
     prop "TrivialAsSeq_" prop_TrivialSchedulerSameAsSeq_
-    prop "replicateConcurrently == replicateM" prop_ReplicateM
-    prop "replicateConcurrently == replicateWork" prop_ReplicateWorkSeq
+    prop "replicateConcurrently == replicateM" $ prop_ReplicateM id . getSeqLike
+    prop "replicateWork == replicateM" $ prop_ReplicateWork id . getSeqLike
+    prop "replicateWork_ == replicateM" $ prop_ReplicateWork_ id . getSeqLike
     it "WorkerIdIsZero" $
       withScheduler Seq (`scheduleWorkId` pure) `shouldReturn` [0]
     prop "TerminateSeq" $ prop_Terminate (withScheduler Seq) terminate (\xs x -> xs ++ [x])
@@ -569,6 +591,9 @@ spec = do
     prop "ArbitraryCompNested" prop_ArbitraryCompNested
     prop "AllJobsProcessed" prop_AllJobsProcessed
     prop "traverseConcurrently == traverse" prop_Traverse
+    prop "replicateConcurrently == replicateM" $ prop_ReplicateM sort
+    prop "replicateWork == replicateM" $ prop_ReplicateWork sort
+    prop "replicateWork_ == replicateM" $ prop_ReplicateWork_ sort
   describe "Exceptions" $ do
     prop "CatchDivideByZero" prop_CatchDivideByZero
     prop "CatchDivideByZeroNested" prop_CatchDivideByZeroNested

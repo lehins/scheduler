@@ -37,6 +37,7 @@ module Control.Scheduler
   , scheduleWorkState
   , scheduleWorkState_
   , replicateWork
+  , replicateWork_
   -- * Batches
   , Batch
   , runBatch
@@ -245,13 +246,24 @@ scheduleWorkId_ scheduler f = stToPrim $ _scheduleWorkId scheduler (primToPrim .
 -- or to allow early termination via `terminate` across all (identical) threads.
 -- To be called within a `withScheduler` block.
 --
--- @since 1.4.1
-replicateWork :: MonadPrimBase s m => Int -> Scheduler s a -> m a -> m ()
-replicateWork !n scheduler f = go n
+-- @since 2.0.0
+replicateWork :: MonadPrimBase s m => Scheduler s a -> Int -> m a -> m ()
+replicateWork scheduler n f = go n
   where
     go !k
       | k <= 0 = pure ()
       | otherwise = stToPrim (scheduleWork scheduler (primToPrim f)) *> go (k - 1)
+
+
+-- | Same as `replicateWork`, but it does not retain the results of scheduled jobs
+--
+-- @since 2.0.0
+replicateWork_ :: MonadPrimBase s m => Scheduler s () -> Int -> m a -> m ()
+replicateWork_ scheduler n f = go n
+  where
+    go !k
+      | k <= 0 = pure ()
+      | otherwise = stToPrim (scheduleWork_ scheduler (primToPrim (void f))) *> go (k - 1)
 
 -- | Similar to `terminate`, but for a `Scheduler` that does not keep any results of computation.
 --
