@@ -104,10 +104,10 @@ workerStatesComp = _workerStatesComp
 --
 -- ==== __Examples__
 --
--- A good example of using stateful workers would be generation of random number in
--- parallel. A lof of times random number generators are not gonna be thread safe, so we
--- can work around this problem, by using a separate stateful generator for each of the
--- workers.
+-- A good example of using stateful workers would be generation of random number
+-- in parallel. A lof of times random number generators are not thread safe, so
+-- we can work around this problem with a separate stateful generator for
+-- each of the workers.
 --
 -- >>> import Control.Monad as M ((>=>), replicateM)
 -- >>> import Control.Concurrent (yield, threadDelay)
