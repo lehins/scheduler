@@ -7,11 +7,11 @@ threads to do the actual computation, this package is for you.
 
 | Language | Github Actions | Coveralls |Gitter.im |
 |:--------:|:--------------:|:---------:|:--------:|
-| ![GitHub top language](https://img.shields.io/github/languages/top/lehins/haskell-scheduler.svg) | [![Build Status](https://github.com/lehins/haskell-scheduler/workflows/scheduler-CI/badge.svg)](https://github.com/lehins/haskell-scheduler/actions) | [![Coverage Status](https://coveralls.io/repos/github/lehins/haskell-scheduler/badge.svg?branch=master)](https://coveralls.io/github/lehins/haskell-scheduler?branch=master) | [![Join the chat at https://gitter.im/haskell-massiv/Lobby](https://badges.gitter.im/haskell-massiv/Lobby.svg)](https://gitter.im/haskell-massiv/Lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+| ![GitHub top language](https://img.shields.io/github/languages/top/lehins/scheduler.svg) | [![Build Status](https://github.com/lehins/scheduler/workflows/scheduler-CI/badge.svg)](https://github.com/lehins/scheduler/actions) | [![Coverage Status](https://coveralls.io/repos/github/lehins/scheduler/badge.svg?branch=master)](https://coveralls.io/github/lehins/scheduler?branch=master) | [![Join the chat at https://gitter.im/haskell-massiv/Lobby](https://badges.gitter.im/haskell-massiv/Lobby.svg)](https://gitter.im/haskell-massiv/Lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 | Gihub | Hackage | Nightly | LTS |
 |:------|:-------:|:-------:|:---:|
-| [`scheduler`](https://github.com/lehins/haskell-scheduler) | [![Hackage](https://img.shields.io/hackage/v/scheduler.svg)](https://hackage.haskell.org/package/scheduler)| [![Nightly](https://www.stackage.org/package/scheduler/badge/nightly)](https://www.stackage.org/nightly/package/scheduler) | [![Nightly](https://www.stackage.org/package/scheduler/badge/lts)](https://www.stackage.org/lts/package/scheduler) |
+| [`scheduler`](https://github.com/lehins/scheduler) | [![Hackage](https://img.shields.io/hackage/v/scheduler.svg)](https://hackage.haskell.org/package/scheduler)| [![Nightly](https://www.stackage.org/package/scheduler/badge/nightly)](https://www.stackage.org/nightly/package/scheduler) | [![Nightly](https://www.stackage.org/package/scheduler/badge/lts)](https://www.stackage.org/lts/package/scheduler) |
 
 
 ## QuickStart

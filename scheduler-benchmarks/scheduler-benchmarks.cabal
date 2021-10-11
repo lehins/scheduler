@@ -1,8 +1,8 @@
 name:                scheduler-benchmarks
 version:             1.0.0.0
-synopsis:            Work stealing scheduler.
-description:         A work stealing scheduler that is primarily developed for [massiv](https://github.com/lehins/massiv) array library, but it is general enough to be useful for any computation that fits the model of few workers and many jobs.
-homepage:            https://github.com/lehins/haskell-scheduler
+synopsis:            Benchmarks for work stealing scheduler.
+description:         Benchmarks for work stealing scheduler.
+homepage:            https://github.com/lehins/scheduler
 license:             BSD3
 license-file:        LICENSE
 author:              Alexey Kuleshevich
@@ -33,4 +33,5 @@ benchmark scheduler
 
 source-repository head
   type:     git
-  location: https://github.com/lehins/haskell-benchmarks
+  location: https://github.com/lehins/scheduler
+  subdir:   scheduler-benchmarks
