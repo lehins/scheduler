@@ -66,3 +66,4 @@ test-suite doctests
 source-repository head
   type:     git
   location: https://github.com/lehins/haskell-scheduler
+  subdir:   scheduler
