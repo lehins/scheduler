@@ -36,7 +36,7 @@ interleaveFooBar = do
 
 In the example above two workers will be created to handle the only two jobs that have been
 scheduled. Printing with `putStr` is not thread safe, so the output that you would get with above
-function is likely be interleaved:
+function is likely to be interleaved:
 
 ```haskell
 λ> interleaveFooBar
