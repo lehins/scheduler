@@ -11,13 +11,15 @@ import Control.Scheduler
 import Control.Scheduler.Global
 import Control.Concurrent (getNumCapabilities)
 import Control.Concurrent.Async.Pool as AsyncPool
+import Control.Concurrent.MVar
 import Criterion.Main
 import Control.DeepSeq
 import Data.Foldable as F
 import Data.IORef
+import Data.Primitive.PVar
 import Streamly (asyncly)
 import qualified Streamly.Prelude as S
-import UnliftIO.Async (pooledMapConcurrently, pooledReplicateConcurrently)
+import UnliftIO.Async (pooledMapConcurrently, pooledReplicateConcurrently, pooledReplicateConcurrently_)
 
 
 
@@ -58,10 +60,13 @@ main = do
                   ]
           ]
       , bgroup "libraries" $
-        [mkBenchReplicate taskGroup "Sum" n x sumIORef sumParVar | n <- [1000], x <- [1000]] ++
+        [mkBenchIncrement "Inc" n 0 (`atomicAddIntPVar` 1) | n <- [10000]] ++
+        [mkBenchMVar "MVar" n 0 incMVar | n <- [10000]] ++
+        [mkBenchReplicate "Sum" n x sumIORef sumParVar | n <- [1000], x <- [1000]] ++
         [mkBenchMap taskGroup "Sum" n sumIO sumParIO sumPar | n <- [2000]]
       ]
   where
+    incMVar mvar = modifyMVar_ mvar $ \x -> pure $! x + 1
     sumIO :: Int -> IO Int
     sumIO x = do
       let y = F.foldl' (+) 0 [x .. 100 * x]
@@ -84,16 +89,70 @@ replicateConcurrentlyGlobal_ n f =
   withGlobalScheduler_ globalScheduler $ \s -> replicateM_ n $ scheduleWork_ s f
 
 
+-- | With lock contention
+mkBenchMVar ::
+     NFData a
+  => String
+  -> Int -- ^ Number of parallel tasks
+  -> Int -- ^ Initial value
+  -> (MVar Int -> IO a)
+  -> Benchmark
+mkBenchMVar name n x fxIO =
+  bgroup
+    ("increment/" ++ name ++ str)
+    [ bench "scheduler/replicateConcurrently" $
+      nfIO $ replicateConcurrently Par n (newMVar x >>= fxIO)
+    , bench "scheduler/replicateConcurrently_" $
+      nfIO $ replicateConcurrently_ Par n (newMVar x >>= fxIO >>= \ !_ -> pure ())
+    , bench "scheduler/replicateConcurrently_ (global)" $
+      nfIO $ replicateConcurrentlyGlobal_ n (newMVar x >>= fxIO >>= \ !_ -> pure ())
+    , bench "unliftio/pooledReplicateConcurrently" $
+      nfIO $ pooledReplicateConcurrently_ n (newMVar x >>= fxIO)
+    , bench "streamly/replicateM" $
+      nfIO $ S.drain $ asyncly $ S.replicateM n (newMVar x >>= fxIO)
+    , bench "async/replicateConcurrently" $ nfIO $ A.replicateConcurrently n (newMVar x >>= fxIO)
+    , bench "base/replicateM" $ nfIO $ replicateM n (newMVar x >>= fxIO)
+    ]
+  where
+    str = "(" ++ show n ++ ")"
+
+-- | Lock-free contention
+mkBenchIncrement ::
+     NFData a
+  => String
+  -> Int -- ^ Number of parallel tasks
+  -> Int -- ^ Initial value
+  -> (PVar Int RealWorld -> IO a)
+  -> Benchmark
+mkBenchIncrement name n x fxIO =
+  bgroup
+    ("increment/" ++ name ++ str)
+    [ bench "scheduler/replicateConcurrently" $
+      nfIO $ replicateConcurrently Par n (newPVar x >>= fxIO)
+    , bench "scheduler/replicateConcurrently_" $
+      nfIO $ replicateConcurrently_ Par n (newPVar x >>= fxIO >>= \ !_ -> pure ())
+    , bench "scheduler/replicateConcurrently_ (global)" $
+      nfIO $ replicateConcurrentlyGlobal_ n (newPVar x >>= fxIO >>= \ !_ -> pure ())
+    , bench "unliftio/pooledReplicateConcurrently" $
+      nfIO $ pooledReplicateConcurrently_ n (newPVar x >>= fxIO)
+    , bench "streamly/replicateM" $
+      nfIO $ S.drain $ asyncly $ S.replicateM n (newPVar x >>= fxIO)
+    , bench "async/replicateConcurrently" $ nfIO $ A.replicateConcurrently n (newPVar x >>= fxIO)
+    , bench "base/replicateM" $ nfIO $ replicateM n (newPVar x >>= fxIO)
+    ]
+  where
+    str = "(" ++ show n ++ ")"
+
+-- | No contention
 mkBenchReplicate ::
      NFData a
-  => TaskGroup
-  -> String
+  => String
   -> Int -- ^ Number of tasks
-  -> Int -- ^ Opaque Int a function should be applied to
+  -> Int -- ^ Opaque Int that function will be applied to
   -> (IORef Int -> IO a)
   -> (IVar Int -> Par a)
   -> Benchmark
-mkBenchReplicate _taskGroup name n x fxIO fxPar =
+mkBenchReplicate name n x fxIO fxPar =
   bgroup
     ("replicate/" ++ name ++ str)
     [ bench "scheduler/replicateConcurrently" $
@@ -104,6 +163,8 @@ mkBenchReplicate _taskGroup name n x fxIO fxPar =
       nfIO $ replicateConcurrentlyGlobal_ n (newIORef x >>= fxIO >>= \ !_ -> pure ())
     , bench "unliftio/pooledReplicateConcurrently" $
       nfIO $ pooledReplicateConcurrently n (newIORef x >>= fxIO)
+    , bench "unliftio/pooledReplicateConcurrently_" $
+      nfIO $ pooledReplicateConcurrently_ n (newIORef x >>= fxIO)
     , bench "streamly/replicateM" $
       nfIO $ S.drain $ asyncly $ S.replicateM n (newIORef x >>= fxIO)
     , bench "async/replicateConcurrently" $ nfIO $ A.replicateConcurrently n (newIORef x >>= fxIO)

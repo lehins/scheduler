@@ -305,7 +305,8 @@ transList xs' = snd . mapAccumL withR xs'
 traverseConcurrently_ :: (MonadUnliftIO m, Foldable t) => Comp -> (a -> m b) -> t a -> m ()
 traverseConcurrently_ comp f xs =
   withRunInIO $ \run ->
-    withScheduler_ comp $ \s -> scheduleWork s $ F.traverse_ (scheduleWork s . void . run . f) xs
+    withScheduler_ comp $ \s -> F.traverse_ (scheduleWork_ s . void . run . f) xs
+{-# INLINE traverseConcurrently_ #-}
 
 -- | Replicate an action @n@ times and schedule them acccording to the supplied computation
 -- strategy.
@@ -315,6 +316,7 @@ replicateConcurrently :: MonadUnliftIO m => Comp -> Int -> m a -> m [a]
 replicateConcurrently comp n f =
   withRunInIO $ \run ->
     withScheduler comp $ \s -> replicateM_ n $ scheduleWork s (run f)
+{-# INLINE replicateConcurrently #-}
 
 -- | Just like `replicateConcurrently`, but discards the results of computation.
 --
@@ -322,8 +324,8 @@ replicateConcurrently comp n f =
 replicateConcurrently_ :: MonadUnliftIO m => Comp -> Int -> m a -> m ()
 replicateConcurrently_ comp n f =
   withRunInIO $ \run -> do
-    withScheduler_ comp $ \s -> scheduleWork s $ replicateM_ n (scheduleWork s $ void $ run f)
-
+    withScheduler_ comp $ \s -> replicateM_ n (scheduleWork_ s $ void $ run f)
+{-# INLINE replicateConcurrently_ #-}
 
 
 
