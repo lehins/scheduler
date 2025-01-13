@@ -42,10 +42,10 @@ test-suite tests
   build-tool-depends: hspec-discover:hspec-discover
   build-depends:      base
                     , deepseq
-                    , genvalidity-hspec
                     , scheduler
                     , hspec
                     , QuickCheck
+                    , quickcheck-classes
                     , unliftio
 
   default-language:   Haskell2010
