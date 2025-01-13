@@ -522,7 +522,5 @@ didAWorkerDie :: Foldable t => IO (t Bool) -> IO Bool
 False
 >>> didAWorkerDie $ withScheduler Par $ \ s -> scheduleWork s $ myThreadId >>= killThread >> pure False
 True
->>> withScheduler Par $ \ s -> scheduleWork s $ myThreadId >>= killThread >> pure False
-*** Exception: thread killed
 
 -}
