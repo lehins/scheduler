@@ -628,6 +628,7 @@ instance Arbitrary a => Arbitrary (Results a) where
       , FinishedEarlyWith <$> arbitrary
       ]
 
+#if !MIN_VERSION_QuickCheck(2,15,0)
 -- | Assert a synchronous exception
 assertExceptionIO :: (NFData a, Exception exc) =>
                      (exc -> Bool) -- ^ Return True if that is the exception that was expected
@@ -641,6 +642,7 @@ assertExceptionIO isExc action =
         (do res <- action
             res `deepseq` return False) $ \exc -> displayException exc `deepseq` return (isExc exc)
     assert hasFailed
+#endif
 
 assertAsyncExceptionIO :: (Exception e, NFData a) => (e -> Bool) -> IO a -> Property
 assertAsyncExceptionIO isAsyncExc action =
