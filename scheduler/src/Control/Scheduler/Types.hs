@@ -34,6 +34,7 @@ import Control.Concurrent.MVar
 import Control.Exception
 import Control.Scheduler.Computation
 import Control.Scheduler.Queue
+import Data.Functor.Classes
 import Data.IORef
 import Data.Primitive.SmallArray
 import Data.Primitive.PVar
@@ -77,6 +78,22 @@ instance Traversable Results where
       Finished xs -> Finished <$> traverse f xs
       FinishedEarly xs x -> FinishedEarly <$> traverse f xs <*> f x
       FinishedEarlyWith x -> FinishedEarlyWith <$> f x
+
+instance Eq1 Results where
+  liftEq f (Finished xs1) (Finished xs2) = liftEq f xs1 xs2
+  liftEq f (FinishedEarly xs1 x1) (FinishedEarly xs2 x2) = liftEq f xs1 xs2 && f x1 x2
+  liftEq f (FinishedEarlyWith x1) (FinishedEarlyWith x2) = f x1 x2
+  liftEq _ _ _ = False
+
+instance Show1 Results where
+  liftShowsPrec f g n = \case
+    Finished xs -> wrap (("Finished " ++) . g xs)
+    FinishedEarly xs x -> wrap (("FinishedEarly " ++) . g xs . (" " ++) . f 11 x)
+    FinishedEarlyWith x -> wrap (("FinishedEarlyWith " ++) . f 11 x)
+    where
+      wrap s
+        | n <= 1 = s
+        | otherwise = ('(' :) . s . (++ ")")
 
 data Jobs m a = Jobs
   { jobsNumWorkers       :: {-# UNPACK #-} !Int

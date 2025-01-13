@@ -1,4 +1,11 @@
-# 2.0.0
+# `scheduler`
+
+## 2.0.1
+
+* Add `Eq1` and `Show1` instances for `Result`
+* Add compatibility with older `primitive`
+
+## 2.0.0
 
 * Switch type parameter of `Scheduler` from monad `m` to state token `s`. Which
   also means that constraints on many functions got tighter (i.e. `MonadPrim`, `MonadPrimBase`)
@@ -7,7 +14,7 @@
 * Swap order of arguments for `replicateWork` for consistency
 * Add `replicateWork_` that is slightly more efficient than `replicateWork`
 
-# 1.5.0
+## 1.5.0
 
 Despite that the major part of the version was bumped up, this release does not include
 any breaking changes, only improvements and additions.
@@ -24,7 +31,7 @@ any breaking changes, only improvements and additions.
 * Addition of `GlobalScheduler` that can be reused throughout the codebase, thus reducing
   initialization overhead.
 
-# 1.4.2
+## 1.4.2
 
 * Add `withTrivialScheduler`
 * Add `Results` data type as well as corresponding functions:
@@ -32,11 +39,11 @@ any breaking changes, only improvements and additions.
   * `withSchedulerWSR`
   * `withTrivialSchedulerR`
 
-# 1.4.1
+## 1.4.1
 
 * Add functions: `replicateWork`
 
-# 1.4.0
+## 1.4.0
 
 * Worker id has been promoted from `Int` to a `newtype` wrapper `WorkerId`.
 * Addition of `SchedulerWS` and `WorkerStates` data types. As well as the
@@ -51,18 +58,18 @@ any breaking changes, only improvements and additions.
   * `unwrapSchedulerWS`
 * Made internal modules accessible, but invisible.
 
-# 1.3.0
+## 1.3.0
 
 * Make sure internal `Scheduler` accessor functions are no longer exported, they only
   cause breakage.
 * Make sure number of capabilities does not change through out the program execution, as
   far as `scheduler` is concerned.
 
-# 1.2.0
+## 1.2.0
 
 * Addition of `scheduleWorkId` and `scheduleWorkId_`
 
-# 1.1.0
+## 1.1.0
 
 * Add functions: `replicateConcurrently` and `replicateConcurrently_`
 * Made `traverseConcurrently_` lazy, thus making it possible to apply to infinite lists and other such
@@ -70,6 +77,6 @@ any breaking changes, only improvements and additions.
 * Fix `Monoid` instance for `Comp`
 * Addition of `Par'` pattern
 
-# 1.0.0
+## 1.0.0
 
 Initial release.

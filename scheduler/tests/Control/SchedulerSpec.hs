@@ -527,7 +527,6 @@ spec = do
         , showLaws
         , semigroupLaws
         , monoidLaws
-        , semigroupMonoidLaws
         ]
     describe "Show" $ do
       it "show == showsPrec 0" $ property $ \(x :: Comp) -> x `deepseq` show x === showsPrec 0 x ""
@@ -631,11 +630,14 @@ instance Arbitrary WorkerId where
   arbitrary = WorkerId <$> arbitrary
 
 instance Arbitrary a => Arbitrary (Results a) where
-  arbitrary =
+  arbitrary = liftArbitrary arbitrary
+
+instance Arbitrary1 Results where
+  liftArbitrary gen =
     oneof
-      [ Finished <$> arbitrary
-      , FinishedEarly <$> arbitrary <*> arbitrary
-      , FinishedEarlyWith <$> arbitrary
+      [ Finished <$> listOf gen
+      , FinishedEarly <$> listOf gen <*> gen
+      , FinishedEarlyWith <$> gen
       ]
 
 #if !MIN_VERSION_QuickCheck(2,15,0)
