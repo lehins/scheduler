@@ -1,0 +1,11 @@
+resolver: lts-18.28
+
+packages:
+- '../scheduler/'
+- '../scheduler-benchmarks/'
+
+extra-deps:
+- lockfree-queue-0.2.4@sha256:156e7ccc193fc5d8b43f065e9cd31c3171c79ec25863283d546900d92930846d,2963
+- unicode-data-0.6.0@sha256:4a42e51b4c50ffc3960999d3a2e94bcea17a55480fe5fead0904c493a513a9f8,5804
+- streamly-0.10.1@sha256:eec2e8e14ac64b9e389600b964541c5e9e0a3d3e657dc54412691df47300a1fd,20899
+- streamly-core-0.2.2@sha256:7245ac46f380af62ce16adb70d26d2710d615f393867cfa8789c29b32d2ff979,20274

@@ -27,7 +27,7 @@ benchmark scheduler
                      , monad-par
                      , scheduler
                      , parallel
-                     , pvar
+                     , pvar     >= 1.0
                      , unliftio >= 0.2.10
                      , streamly >= 0.10
                      , streamly-core >= 0.2

@@ -1,0 +1,10 @@
+resolver: lts-11.22
+
+packages:
+- '../scheduler/'
+
+extra-deps:
+- primitive-0.6.4.0@sha256:5b6a2c3cc70a35aabd4565fcb9bb1dd78fe2814a36e62428a9a1aae8c32441a1,2079
+- pvar-0.2.0.0@sha256:786ab43a3e7921d0086e723e620120543200c57b53f5e0f6ef1cb570c94a9144,1825
+- quickcheck-classes-0.6.1.0@sha256:09e30c9cfc6a01fd39a6c02daf36735546c9c2aa1893c72af26b796fe546d149,6766
+- semirings-0.7@sha256:ca9194468c1a682ef7ce37c7f0ec381f4ca44939b48211a9a10fa14479481fce,2507

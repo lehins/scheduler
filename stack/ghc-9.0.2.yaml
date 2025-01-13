@@ -1,11 +1,9 @@
-resolver: nightly-2025-01-12
+resolver: lts-19.33
 
 packages:
-- 'scheduler/'
-- 'scheduler-benchmarks/'
+- '../scheduler/'
+- '../scheduler-benchmarks/'
 
 extra-deps:
 - streamly-0.10.1@sha256:eec2e8e14ac64b9e389600b964541c5e9e0a3d3e657dc54412691df47300a1fd,20899
 - streamly-core-0.2.2@sha256:7245ac46f380af62ce16adb70d26d2710d615f393867cfa8789c29b32d2ff979,20274
-
-allow-newer: true

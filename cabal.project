@@ -1,7 +1,14 @@
 packages:
-  scheduler/scheduler.cabal
-  scheduler-benchmarks/scheduler-benchmarks.cabal
-
-constraints:
- , genvalidity == 0.9.1.0
- , genvalidity-hspec < 0.7.0.4
+  scheduler
+  scheduler-benchmarks
+tests: True
+benchmarks: False
+test-show-details: streaming
+write-ghc-environment-files: always
+program-options
+  ghc-options: -Werror
+if impl(ghc >= 9.12)
+  allow-newer:
+    aeson:ghc-prim,
+    aeson:template-haskell,
+    template-haskell:ghc-boot-th
