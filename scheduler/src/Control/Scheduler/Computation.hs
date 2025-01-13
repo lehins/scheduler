@@ -72,7 +72,7 @@ instance NFData Comp where
 instance Monoid Comp where
   mempty = Seq
   {-# INLINE mempty #-}
-  mappend = joinComp
+  mappend = (<>)
   {-# INLINE mappend #-}
 
 instance Semigroup Comp where
