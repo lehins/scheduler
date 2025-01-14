@@ -89,7 +89,7 @@ jobs:
     - name: Windows Cache
       id: cache-windows
       uses: actions/cache@v4
-      if: matrix.os == 'windows-latest'
+      if: matrix.os == 'Windows-latest'
       with:
         path: |
           C:\\Users\\RUNNER~1\\AppData\\Local\\Programs\\stack
@@ -126,31 +126,31 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { cabal: "3.14", os: ubuntu-latest,  ghc: "8.4.4"  }
-          - { cabal: "3.14", os: ubuntu-latest,  ghc: "8.6.5"  }
-          - { cabal: "3.14", os: ubuntu-latest,  ghc: "8.8.4"  }
-          - { cabal: "3.14", os: ubuntu-latest,  ghc: "8.10.7" }
-          - { cabal: "3.14", os: ubuntu-latest,  ghc: "9.0.2"  }
-          - { cabal: "3.14", os: ubuntu-latest,  ghc: "9.2.8"  }
-          - { cabal: "3.14", os: ubuntu-latest,  ghc: "9.4.8"  }
-          - { cabal: "3.14", os: ubuntu-latest,  ghc: "9.6.6"  }
-          - { cabal: "3.14", os: ubuntu-latest,  ghc: "9.8.4"  }
-          - { cabal: "3.14", os: ubuntu-latest,  ghc: "9.10.1" }
-          - { cabal: "3.14", os: ubuntu-latest,  ghc: "9.12.1" }
-          - { cabal: "3.14", os: windows-latest, ghc: "9.0.2"  }
-          - { cabal: "3.14", os: windows-latest, ghc: "9.2.8"  }
-          - { cabal: "3.14", os: windows-latest, ghc: "9.4.8"  }
-          - { cabal: "3.14", os: windows-latest, ghc: "9.6.6"  }
-          - { cabal: "3.14", os: windows-latest, ghc: "9.8.4"  }
-          - { cabal: "3.14", os: windows-latest, ghc: "9.10.1" }
-          - { cabal: "3.14", os: windows-latest, ghc: "9.12.1" }
-          - { cabal: "3.14", os: macOS-13,       ghc: "9.0.2"  }
-          - { cabal: "3.14", os: macOS-latest,   ghc: "9.2.8"  }
-          - { cabal: "3.14", os: macOS-latest,   ghc: "9.4.8"  }
-          - { cabal: "3.14", os: macOS-latest,   ghc: "9.6.6"  }
-          - { cabal: "3.14", os: macOS-latest,   ghc: "9.8.4"  }
-          - { cabal: "3.14", os: macOS-latest,   ghc: "9.10.1" }
-          - { cabal: "3.14", os: macOS-latest,   ghc: "9.12.1" }
+          - { cabal: "3.14", os: Ubuntu-latest,  ghc: "8.4.4"  }
+          - { cabal: "3.14", os: Ubuntu-latest,  ghc: "8.6.5"  }
+          - { cabal: "3.14", os: Ubuntu-latest,  ghc: "8.8.4"  }
+          - { cabal: "3.14", os: Ubuntu-latest,  ghc: "8.10.7" }
+          - { cabal: "3.14", os: Ubuntu-latest,  ghc: "9.0.2"  }
+          - { cabal: "3.14", os: Ubuntu-latest,  ghc: "9.2.8"  }
+          - { cabal: "3.14", os: Ubuntu-latest,  ghc: "9.4.8"  }
+          - { cabal: "3.14", os: Ubuntu-latest,  ghc: "9.6.6"  }
+          - { cabal: "3.14", os: Ubuntu-latest,  ghc: "9.8.4"  }
+          - { cabal: "3.14", os: Ubuntu-latest,  ghc: "9.10.1" }
+          - { cabal: "3.14", os: Ubuntu-latest,  ghc: "9.12.1" }
+          - { cabal: "3.14", os: Windows-latest, ghc: "9.0.2"  }
+          - { cabal: "3.14", os: Windows-latest, ghc: "9.2.8"  }
+          - { cabal: "3.14", os: Windows-latest, ghc: "9.4.8"  }
+          - { cabal: "3.14", os: Windows-latest, ghc: "9.6.6"  }
+          - { cabal: "3.14", os: Windows-latest, ghc: "9.8.4"  }
+          - { cabal: "3.14", os: Windows-latest, ghc: "9.10.1" }
+          - { cabal: "3.14", os: Windows-latest, ghc: "9.12.1" }
+          - { cabal: "3.14", os: MacOS-13,       ghc: "9.0.2"  }
+          - { cabal: "3.14", os: MacOS-latest,   ghc: "9.2.8"  }
+          - { cabal: "3.14", os: MacOS-latest,   ghc: "9.4.8"  }
+          - { cabal: "3.14", os: MacOS-latest,   ghc: "9.6.6"  }
+          - { cabal: "3.14", os: MacOS-latest,   ghc: "9.8.4"  }
+          - { cabal: "3.14", os: MacOS-latest,   ghc: "9.10.1" }
+          - { cabal: "3.14", os: MacOS-latest,   ghc: "9.12.1" }
 
     env:
       cache-version: v0 # bump up this version to invalidate currently stored cache
