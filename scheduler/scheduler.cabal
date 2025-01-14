@@ -1,8 +1,8 @@
 name:                scheduler
-version:             2.0.0.1
+version:             2.0.1.0
 synopsis:            Work stealing scheduler.
 description:         A work stealing scheduler that is designed for parallelization of heavy work loads. It was primarily developed for [massiv](https://github.com/lehins/massiv) array library, but it is general enough to be useful for any computation that fits the model of few workers and many jobs.
-homepage:            https://github.com/lehins/haskell-scheduler
+homepage:            https://github.com/lehins/scheduler
 license:             BSD3
 license-file:        LICENSE
 author:              Alexey Kuleshevich
@@ -13,6 +13,19 @@ build-type:          Simple
 extra-source-files:  README.md
                    , CHANGELOG.md
 cabal-version:       >=1.10
+tested-with:          GHC == 8.0.2
+                    , GHC == 8.2.2
+                    , GHC == 8.4.4
+                    , GHC == 8.6.5
+                    , GHC == 8.8.6
+                    , GHC == 8.10.7
+                    , GHC == 9.0.2
+                    , GHC == 9.2.8
+                    , GHC == 9.4.8
+                    , GHC == 9.6.6
+                    , GHC == 9.8.4
+                    , GHC == 9.10.1
+                    , GHC == 9.12.1
 
 library
   hs-source-dirs:      src
@@ -26,8 +39,8 @@ library
                      , atomic-primops
                      , deepseq
                      , exceptions
-                     , unliftio-core
-                     , primitive      >= 0.7.1
+                     , unliftio-core  >= 0.1.1
+                     , primitive      >= 0.6.4
                      , pvar           < 2.0
   default-language:    Haskell2010
   ghc-options:         -Wall -Wno-simplifiable-class-constraints
@@ -40,12 +53,12 @@ test-suite tests
   other-modules:      Spec
                     , Control.SchedulerSpec
   build-tool-depends: hspec-discover:hspec-discover
-  build-depends:      base
+  build-depends:      base           >= 4.9 && < 5
                     , deepseq
-                    , genvalidity-hspec
                     , scheduler
                     , hspec
                     , QuickCheck
+                    , quickcheck-classes >= 0.6
                     , unliftio
 
   default-language:   Haskell2010
@@ -55,12 +68,7 @@ test-suite doctests
   type:             exitcode-stdio-1.0
   hs-source-dirs:   tests
   main-is:          doctests.hs
-  build-depends: base
-  if impl(ghc >= 8.2) && impl(ghc < 8.10)
-    build-depends: doctest           >=0.15
-                 , mwc-random
-                 , scheduler
-                 , vector
+  build-depends:    base           >= 4.9 && < 5
   default-language:    Haskell2010
 
 source-repository head

@@ -1,0 +1,7 @@
+resolver: lts-22.43
+
+packages:
+- '../scheduler/'
+- '../scheduler-benchmarks/'
+
+extra-deps: []

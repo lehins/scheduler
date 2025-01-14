@@ -20,16 +20,13 @@ import Data.Bits (complement)
 import qualified Data.Foldable as F (toList, traverse_)
 import Data.IORef
 import Data.List (groupBy, sort, sortOn)
+import Data.Proxy
 import Test.Hspec
 import Test.Hspec.QuickCheck
 import Test.QuickCheck
+import Test.QuickCheck.Classes
 import Test.QuickCheck.Function
 import Test.QuickCheck.Monadic
-import Test.Validity.Eq
-import Test.Validity.Functor
-import Test.Validity.Monoid
-import Test.Validity.Ord
-import Test.Validity.Show
 import UnliftIO.Async
 import UnliftIO.Exception hiding (assert)
 #if !MIN_VERSION_base(4,11,0)
@@ -514,7 +511,6 @@ prop_FindCancelResume comp x' (xs1', xs2') ys =
 --     res' <- withSchedulerR comp scheduleJobs
 --     pure (res === [n] .&&. res' === FinishedEarlyWith n)
 
-
 spec :: Spec
 spec = do
   describe "Comp" $ do
@@ -525,27 +521,40 @@ spec = do
         property $ \(x :: Comp) y z -> x <> (y <> z) === (x <> y) <> z
       it "mconcat = foldr '(<>)' mempty" $
         property $ \(xs :: [Comp]) -> mconcat xs === foldr (<>) mempty xs
-      eqSpecOnArbitrary @Comp
-      monoidSpecOnArbitrary @Comp
+    it "Laws" $
+      lawsCheckOne (Proxy @Comp)
+        [ eqLaws
+        , showLaws
+        , semigroupLaws
+        , monoidLaws
+        ]
     describe "Show" $ do
       it "show == showsPrec 0" $ property $ \(x :: Comp) -> x `deepseq` show x === showsPrec 0 x ""
       it "(show) == showsPrec 1" $
         property $ \(x :: Comp) (Positive n) ->
           x /= Seq && x /= Par ==> ("(" <> show x <> ")" === showsPrec n x "")
   describe "Results" $ do
-    eqSpecOnArbitrary @(Results Int)
-    functorSpecOnArbitrary @Results
-    showReadSpecOnArbitrary @(Results Int)
+    it "Laws" $ do
+      lawsCheckOne (Proxy @(Results Int))
+        [ eqLaws
+        , showLaws
+        , showReadLaws
+        ]
+      lawsCheck (functorLaws (Proxy @Results))
     it "Traversable" $ property $ \(rs :: Results Int) (f :: Fun Int (Maybe Int)) ->
       traverse (apply f) (F.toList rs) === fmap F.toList (traverse (apply f) rs)
   describe "WorkerId" $ do
-    eqSpecOnArbitrary @WorkerId
-    ordSpecOnArbitrary @WorkerId
     it "MaxMin" $ property $ \x y ->
       conjoin [ max (WorkerId x) (WorkerId y) === WorkerId (max x y)
               , min (WorkerId x) (WorkerId y) === WorkerId (min x y)
               ]
-    showReadSpecOnArbitrary @WorkerId
+    it "Laws" $ do
+      lawsCheckOne (Proxy @WorkerId)
+        [ eqLaws
+        , ordLaws
+        , showLaws
+        , showReadLaws
+        ]
     describe "Enum" $ do
       it "toEnumFromEnum" $ property $ \ wid@(WorkerId i) ->
         toEnum (getWorkerId wid) === wid .&&. fromEnum wid === i
@@ -621,13 +630,17 @@ instance Arbitrary WorkerId where
   arbitrary = WorkerId <$> arbitrary
 
 instance Arbitrary a => Arbitrary (Results a) where
-  arbitrary =
+  arbitrary = liftArbitrary arbitrary
+
+instance Arbitrary1 Results where
+  liftArbitrary gen =
     oneof
-      [ Finished <$> arbitrary
-      , FinishedEarly <$> arbitrary <*> arbitrary
-      , FinishedEarlyWith <$> arbitrary
+      [ Finished <$> listOf gen
+      , FinishedEarly <$> listOf gen <*> gen
+      , FinishedEarlyWith <$> gen
       ]
 
+#if !MIN_VERSION_QuickCheck(2,15,0)
 -- | Assert a synchronous exception
 assertExceptionIO :: (NFData a, Exception exc) =>
                      (exc -> Bool) -- ^ Return True if that is the exception that was expected
@@ -641,6 +654,7 @@ assertExceptionIO isExc action =
         (do res <- action
             res `deepseq` return False) $ \exc -> displayException exc `deepseq` return (isExc exc)
     assert hasFailed
+#endif
 
 assertAsyncExceptionIO :: (Exception e, NFData a) => (e -> Bool) -> IO a -> Property
 assertAsyncExceptionIO isAsyncExc action =

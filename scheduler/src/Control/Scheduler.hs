@@ -1,8 +1,8 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE MonoLocalBinds #-}
-{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 -- |
 -- Module      : Control.Scheduler
 -- Copyright   : (c) Alexey Kuleshevich 2018-2021
@@ -162,7 +162,7 @@ withSchedulerWSR = withSchedulerWSInternal withSchedulerR
 -- | Schedule a job that will get a worker state passed as an argument
 --
 -- @since 1.4.0
-scheduleWorkState :: MonadPrimBase RealWorld m => SchedulerWS ws a -> (ws -> m a) -> m ()
+scheduleWorkState :: (PrimBase m, RealWorld ~ PrimState m) => SchedulerWS ws a -> (ws -> m a) -> m ()
 scheduleWorkState schedulerS withState =
   scheduleWorkId (_getScheduler schedulerS) $ \(WorkerId i) ->
     withState (indexSmallArray (_workerStatesArray (_workerStates schedulerS)) i)
@@ -170,7 +170,7 @@ scheduleWorkState schedulerS withState =
 -- | Same as `scheduleWorkState`, but dont' keep the result of computation.
 --
 -- @since 1.4.0
-scheduleWorkState_ :: MonadPrimBase RealWorld m => SchedulerWS ws () -> (ws -> m ()) -> m ()
+scheduleWorkState_ :: (PrimBase m, RealWorld ~ PrimState m) => SchedulerWS ws () -> (ws -> m ()) -> m ()
 scheduleWorkState_ schedulerS withState =
   scheduleWorkId_ (_getScheduler schedulerS) $ \(WorkerId i) ->
     withState (indexSmallArray (_workerStatesArray (_workerStates schedulerS)) i)
@@ -191,7 +191,7 @@ numWorkers = _numWorkers
 -- scheduler.
 --
 -- @since 1.2.0
-scheduleWorkId :: MonadPrimBase s m => Scheduler s a -> (WorkerId -> m a) -> m ()
+scheduleWorkId :: (PrimBase m, s ~ PrimState m) => Scheduler s a -> (WorkerId -> m a) -> m ()
 scheduleWorkId s f = stToPrim (_scheduleWorkId s (primToPrim . f))
 
 -- | As soon as possible try to terminate any computation that is being performed by all
@@ -203,7 +203,7 @@ scheduleWorkId s f = stToPrim (_scheduleWorkId s (primToPrim . f))
 -- although it will make sure their results are discarded.
 --
 -- @since 1.1.0
-terminate :: MonadPrim s m => Scheduler s a -> a -> m a
+terminate :: (PrimMonad m, s ~ PrimState m) => Scheduler s a -> a -> m a
 terminate scheduler a = stToPrim (_terminate scheduler (Early a))
 
 -- | Same as `terminate`, but returning a single element list containing the supplied
@@ -216,14 +216,14 @@ terminate scheduler a = stToPrim (_terminate scheduler (Early a))
 -- function.
 --
 -- @since 1.1.0
-terminateWith :: MonadPrim s m => Scheduler s a -> a -> m a
+terminateWith :: (PrimMonad m, s ~ PrimState m) => Scheduler s a -> a -> m a
 terminateWith scheduler a = stToPrim $ _terminate scheduler (EarlyWith a)
 
 -- | Schedule an action to be picked up and computed by a worker from a pool of
 -- jobs. Similar to `scheduleWorkId`, except the job doesn't get the worker id.
 --
 -- @since 1.0.0
-scheduleWork :: MonadPrimBase s m => Scheduler s a -> m a -> m ()
+scheduleWork :: (PrimBase m, s ~ PrimState m) => Scheduler s a -> m a -> m ()
 scheduleWork scheduler f = stToPrim $ _scheduleWorkId scheduler (const (primToPrim f))
 
 
@@ -232,13 +232,13 @@ scheduleWork scheduler f = stToPrim $ _scheduleWorkId scheduler (const (primToPr
 -- | Same as `scheduleWork`, but only for a `Scheduler` that doesn't keep the results.
 --
 -- @since 1.1.0
-scheduleWork_ :: MonadPrimBase s m => Scheduler s () -> m () -> m ()
+scheduleWork_ :: (PrimBase m, s ~ PrimState m) => Scheduler s () -> m () -> m ()
 scheduleWork_ s = stToPrim . scheduleWork s . primToPrim
 
 -- | Same as `scheduleWorkId`, but only for a `Scheduler` that doesn't keep the results.
 --
 -- @since 1.2.0
-scheduleWorkId_ :: MonadPrimBase s m => Scheduler s () -> (WorkerId -> m ()) -> m ()
+scheduleWorkId_ :: (PrimBase m, s ~ PrimState m) => Scheduler s () -> (WorkerId -> m ()) -> m ()
 scheduleWorkId_ scheduler f = stToPrim $ _scheduleWorkId scheduler (primToPrim . f)
 
 -- | Schedule the same action to run @n@ times concurrently. This differs from
@@ -247,7 +247,7 @@ scheduleWorkId_ scheduler f = stToPrim $ _scheduleWorkId scheduler (primToPrim .
 -- To be called within a `withScheduler` block.
 --
 -- @since 2.0.0
-replicateWork :: MonadPrimBase s m => Scheduler s a -> Int -> m a -> m ()
+replicateWork :: (PrimBase m, s ~ PrimState m) => Scheduler s a -> Int -> m a -> m ()
 replicateWork scheduler n f = go n
   where
     go !k
@@ -258,7 +258,7 @@ replicateWork scheduler n f = go n
 -- | Same as `replicateWork`, but it does not retain the results of scheduled jobs
 --
 -- @since 2.0.0
-replicateWork_ :: MonadPrimBase s m => Scheduler s () -> Int -> m a -> m ()
+replicateWork_ :: (PrimBase m, s ~ PrimState m) => Scheduler s () -> Int -> m a -> m ()
 replicateWork_ scheduler n f = go n
   where
     go !k
@@ -270,7 +270,7 @@ replicateWork_ scheduler n f = go n
 -- /Important/ - In case of `Seq` computation strategy this function has no affect.
 --
 -- @since 1.1.0
-terminate_ :: MonadPrim s m => Scheduler s () -> m ()
+terminate_ :: (PrimMonad m, s ~ PrimState m) => Scheduler s () -> m ()
 terminate_ s = stToPrim $ _terminate s (Early ())
 
 
@@ -278,7 +278,7 @@ terminate_ s = stToPrim $ _terminate s (Early ())
 -- computation strategy, except it is restricted to `PrimMonad`, instead of `MonadUnliftIO`.
 --
 -- @since 1.4.2
-withTrivialScheduler :: MonadPrim s m => (Scheduler s a -> m b) -> m [a]
+withTrivialScheduler :: (PrimMonad m, s ~ PrimState m) => (Scheduler s a -> m b) -> m [a]
 withTrivialScheduler action = F.toList <$> withTrivialSchedulerR action
 
 
@@ -412,7 +412,7 @@ withScheduler_ comp f =
 -- | Check if the supplied batch has already finished.
 --
 -- @since 1.5.0
-hasBatchFinished :: MonadPrim s m => Batch s a -> m Bool
+hasBatchFinished :: (PrimMonad m, s ~ PrimState m) => Batch s a -> m Bool
 hasBatchFinished = stToPrim . batchHasFinished
 {-# INLINE hasBatchFinished #-}
 
@@ -425,21 +425,21 @@ hasBatchFinished = stToPrim . batchHasFinished
 -- concurrent cancelation and it will return `True`.
 --
 -- @since 1.5.0
-cancelBatch :: MonadPrim s m => Batch s a -> a -> m Bool
+cancelBatch :: (PrimMonad m, s ~ PrimState m) => Batch s a -> a -> m Bool
 cancelBatch b = stToPrim . batchCancel b
 {-# INLINE cancelBatch #-}
 
 -- | Same as `cancelBatch`, but only works with schedulers that don't care about results
 --
 -- @since 1.5.0
-cancelBatch_ :: MonadPrim s m => Batch s () -> m Bool
+cancelBatch_ :: (PrimMonad m, s ~ PrimState m) => Batch s () -> m Bool
 cancelBatch_ b = stToPrim $ batchCancel b ()
 {-# INLINE cancelBatch_ #-}
 
 -- | Same as `cancelBatch_`, but the result of computation will be set to `FinishedEarlyWith`
 --
 -- @since 1.5.0
-cancelBatchWith :: MonadPrim s m => Batch s a -> a -> m Bool
+cancelBatchWith :: (PrimMonad m, s ~ PrimState m) => Batch s a -> a -> m Bool
 cancelBatchWith b = stToPrim . batchCancelWith b
 {-# INLINE cancelBatchWith #-}
 
@@ -448,7 +448,7 @@ cancelBatchWith b = stToPrim . batchCancelWith b
 --
 -- @since 1.5.0
 getCurrentBatch ::
-     MonadPrim s m => Scheduler s a -> m (Batch s a)
+     (PrimMonad m, s ~ PrimState m) => Scheduler s a -> m (Batch s a)
 getCurrentBatch scheduler = stToPrim $ do
   batchId <- _currentBatchId scheduler
   pure $ Batch
@@ -473,7 +473,7 @@ getCurrentBatch scheduler = stToPrim $ do
 -- scheduler prior to starting the batch it will end up on the batch result list.
 --
 -- @since 1.5.0
-runBatch :: MonadPrimBase s m => Scheduler s a -> (Batch s a -> m c) -> m [a]
+runBatch :: (PrimBase m, s ~ PrimState m) => Scheduler s a -> (Batch s a -> m c) -> m [a]
 runBatch scheduler f = stToPrim $ do
   _ <- primToPrim . f =<< getCurrentBatch scheduler
   reverse . resultsToList <$> _waitForCurrentBatch scheduler
@@ -483,7 +483,7 @@ runBatch scheduler f = stToPrim $ do
 --
 -- @since 1.5.0
 runBatch_ ::
-     MonadPrimBase s m => Scheduler s () -> (Batch s () -> m c) -> m ()
+     (PrimBase m, s ~ PrimState m) => Scheduler s () -> (Batch s () -> m c) -> m ()
 runBatch_ scheduler f = stToPrim $ do
   _ <- primToPrim . f =<< getCurrentBatch scheduler
   void (_waitForCurrentBatch scheduler)
@@ -494,7 +494,7 @@ runBatch_ scheduler f = stToPrim $ do
 --
 -- @since 1.5.0
 runBatchR ::
-     MonadPrimBase s m => Scheduler s a -> (Batch s a -> m c) -> m (Results a)
+     (PrimBase m, s ~ PrimState m) => Scheduler s a -> (Batch s a -> m c) -> m (Results a)
 runBatchR scheduler f = stToPrim $ do
   _ <- primToPrim . f =<< getCurrentBatch scheduler
   reverseResults <$> _waitForCurrentBatch scheduler
@@ -522,7 +522,5 @@ didAWorkerDie :: Foldable t => IO (t Bool) -> IO Bool
 False
 >>> didAWorkerDie $ withScheduler Par $ \ s -> scheduleWork s $ myThreadId >>= killThread >> pure False
 True
->>> withScheduler Par $ \ s -> scheduleWork s $ myThreadId >>= killThread >> pure False
-*** Exception: thread killed
 
 -}

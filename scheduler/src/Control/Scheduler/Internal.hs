@@ -1,10 +1,11 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 {-# OPTIONS_HADDOCK hide, not-home #-}
 -- |
 -- Module      : Control.Scheduler.Internal
@@ -115,23 +116,23 @@ trivialScheduler_ =
 -- rather computed immediately.
 --
 -- @since 1.4.2
-withTrivialSchedulerR :: forall a b m s. MonadPrim s m => (Scheduler s a -> m b) -> m (Results a)
+withTrivialSchedulerR :: forall a b m s. (PrimMonad m, s ~ PrimState m) => (Scheduler s a -> m b) -> m (Results a)
 withTrivialSchedulerR action = do
   resVar <- newMutVar []
   batchVar <- newMutVar $ BatchId 0
   finResVar <- newMutVar Nothing
   batchEarlyVar <- newMutVar Nothing
-  let bumpCurrentBatchId :: MonadPrim s m' => m' ()
+  let bumpCurrentBatchId :: (PrimMonad m', s ~ PrimState m') => m' ()
       bumpCurrentBatchId = atomicModifyMutVar' batchVar (\(BatchId x) -> (BatchId (x + 1), ()))
-      bumpBatchId :: MonadPrim s m' => BatchId -> m' Bool
+      bumpBatchId :: (PrimMonad m', s ~ PrimState m') => BatchId -> m' Bool
       bumpBatchId (BatchId c) =
         atomicModifyMutVar' batchVar $ \b@(BatchId x) ->
           if x == c
             then (BatchId (x + 1), True)
             else (b, False)
-      takeBatchEarly :: MonadPrim s m' => m' (Maybe (Early a))
+      takeBatchEarly :: (PrimMonad m', s ~ PrimState m') => m' (Maybe (Early a))
       takeBatchEarly = atomicModifyMutVar' batchEarlyVar $ \mEarly -> (Nothing, mEarly)
-      takeResults :: MonadPrim s m' => m' [a]
+      takeResults :: (PrimMonad m', s ~ PrimState m') => m' [a]
       takeResults = atomicModifyMutVar' resVar $ \res -> ([], res)
   _ <-
     action $
