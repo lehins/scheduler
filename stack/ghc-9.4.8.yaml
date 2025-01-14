@@ -1,10 +1,5 @@
 resolver: lts-21.25
-
+system-ghc: true
 packages:
 - '../scheduler/'
-- '../scheduler-benchmarks/'
-
-extra-deps:
-- async-pool-0.9.2@sha256:532b356a3a2d3e6ec848ca266b566f8cf60c52a107f4b2c7e690cdd2b1ae67b2,1605
-- streamly-0.10.1@sha256:eec2e8e14ac64b9e389600b964541c5e9e0a3d3e657dc54412691df47300a1fd,20899
-- streamly-core-0.2.2@sha256:7245ac46f380af62ce16adb70d26d2710d615f393867cfa8789c29b32d2ff979,20274
+extra-deps: []
